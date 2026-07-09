@@ -3,9 +3,9 @@
   "name": "Universal Web App",
   "icons": [
     {
-      "src": "https://flaticon.com",
+      "src": "./icon128.png",
       "type": "image/png",
-      "sizes": "512x512",
+      "sizes": "128x128",
       "purpose": "any maskable"
     }
   ],
