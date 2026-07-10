@@ -1,6 +1,6 @@
 {
-  "short_name": "UniApp",
-  "name": "Universal Web App",
+  "short_name": "NotePad",
+  "name": "my-notepad",
   "icons": [
     {
       "src": "./icon128.png",

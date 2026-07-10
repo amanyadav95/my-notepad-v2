@@ -1,9 +1,13 @@
-const CACHE_NAME = 'universal-app-v1';
+const CACHE_NAME = 'my-notepad';
 const ASSETS = [
     './',
     './index.html',
     './app.js',
-    './manifest.json'
+    './manifest.json',
+    './bootstrap.min.css',
+    './bootstrap.bundle.min.js',
+    './jquery-4.0.0.min.js',
+    './popper.min.js'
 ];
 
 self.addEventListener('install', (e) => {
