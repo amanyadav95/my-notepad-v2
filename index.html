@@ -36,25 +36,72 @@
         font-weight: bold;
         border-left: 2px solid #61a1fe !important;
     }
-
-/* .page-body */
+    .sidebar-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+        z-index: 1040;
+    }
+    .mobile-topbar {
+        background: var(--bs-body-bg, #fff);
+    }
+    @media (max-width: 767.98px) {
+        .side-nev-col {
+            position: fixed;
+            top: 0;
+            left: -85%;
+            width: 85%;
+            max-width: 320px;
+            height: 100%;
+            z-index: 1050;
+            transition: left 0.25s ease-in-out;
+            overflow-y: auto;
+            padding: 0;
+        }
+        .side-nev-col.open {
+            left: 0;
+        }
+        .side-nev-col.open ~ .sidebar-overlay,
+        .sidebar-overlay.show {
+            display: block;
+        }
+        .side-nev {
+            height: 100%;
+            border-radius: 0;
+        }
+    }
 </style>
 <body>
     <div>
-        <div class="row  m-1">
-            <div class="col-2">
-              <div class="card side-nev">
+        <!-- Mobile top bar: only visible below md breakpoint -->
+        <div class="d-md-none d-flex align-items-center p-2 border-bottom mobile-topbar">
+            <button id="sidebarToggle" class="btn btn-outline-secondary btn-sm me-2" type="button" onclick="toggleSidebar()" aria-label="Toggle notes menu">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-list" viewBox="0 0 16 16">
+                   <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5"/>
+                </svg>
+            </button>
+            <strong>My-NoTeS</strong>
+        </div>
+        <!-- Dark backdrop shown behind the sidebar on mobile -->
+        <div id="sidebarOverlay" class="sidebar-overlay" onclick="closeSidebar()"></div>
+        <div class="row m-1">
+            <div class="col-12 col-md-3 col-lg-2 side-nev-col" id="sideNevCol">
+            <div class="card side-nev">
                 <div class="card-body">
-                  <h3 class="text-light-emphasis">My-NoTeS</h3>
-                  <button id="newNote" type="button" class="btn btn-outline-secondary btn-sm w-100 mb-2">+ New Note</button>
-                  <div id="indexListing"></div>
-                  <div class="input-group input-group-sm">
-                    <input id="newNoteTitle" type="text"  class="form-control input-group-sm hide" placeholder="Type title here" maxlength="30">
-                  </div>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h3 class="text-light-emphasis mb-0 d-none d-md-block">My-NoTeS</h3>
+                        <button type="button" class="btn btn-sm btn-outline-secondary d-md-none close-sidebar-btn" onclick="closeSidebar()" aria-label="Close menu">&times;</button>
+                    </div>
+                    <button id="newNote" type="button" class="btn btn-outline-secondary btn-sm w-100 mb-2 mt-2">+ New Note</button>
+                    <div id="indexListing"></div>
+                    <div class="input-group input-group-sm">
+                        <input id="newNoteTitle" type="text"  class="form-control input-group-sm hide" placeholder="Type title here" maxlength="30">
+                    </div>
                 </div>
-              </div>
             </div>
-            <div class="col-10">
+            </div>
+            <div class="col-12 col-md-9 col-lg-10">
               <div class="">
                 <div class="input-group mb-1">
                   <input type="text" id="fileTitle" class="form-control" placeholder="Title" aria-label="Title" aria-describedby="saveNote" disabled>

@@ -132,11 +132,19 @@ function showIndex() {
                         </div>`;
         $.each(pages, function(key, pageName) {
             pagelist += `<button onclick="selectFile('${titles}','${key}')" id="${titles}-${key}" type="button" class="${(pageName == activePage && titles == activeNote) ? 'active-file' : ''} select-file list-group-item list-group-item-action btn-sm border-0">${pageName.replaceAll("-", " ")}
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-file-earmark-text" viewBox="0 0 16 16">
+                                <path d="M5.5 7a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1zM5 9.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m0 2a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 0 1h-2a.5.5 0 0 1-.5-.5"/>
+                                <path d="M9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.5zm0 1v2A1.5 1.5 0 0 0 11 4.5h2V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z"/>
+                            </svg>
                             <span onclick="deleteFile(event, '${titles}','${key}')" class="delete-file-btn float-end text-danger" title="Delete file">&times;</span>
                         </button>`;
         })
         html += `<div class="list-group mb-1">
                     <button onclick="selectNotee('${titles}')" id="${titles}-btn" type="button" class="${(titles == activeNote) ? 'active-note-btn' : ''} select-note-btn list-group-item list-group-item-action btn-sm" aria-current="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-journals" viewBox="0 0 16 16">
+                            <path d="M5 0h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2 2 2 0 0 1-2 2H3a2 2 0 0 1-2-2h1a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1H1a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v9a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1H3a2 2 0 0 1 2-2"/>
+                            <path d="M1 6v-.5a.5.5 0 0 1 1 0V6h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1zm0 3v-.5a.5.5 0 0 1 1 0V9h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1zm0 2.5v.5H.5a.5.5 0 0 0 0 1h2a.5.5 0 0 0 0-1H2v-.5a.5.5 0 0 0-1 0"/>
+                        </svg>
                         ${titles.replaceAll("-", " ")}
                         <span onclick="deleteNote(event, '${titles}')" class="delete-note-btn float-end text-danger" title="Delete note">&times;</span>
                     </button>
@@ -187,6 +195,7 @@ function selectFile(ttl, pgs) {
     $(`#${ttl}-${pgs}`).addClass('active-file');
     let file = getFileFromStorage(ttl, activePage);
     viewPage(file);
+    closeSidebarOnMobile();
 }
 
 $(`#saveNote`).on('click', function() {
@@ -274,5 +283,23 @@ function deleteFile(event, ttl, pgs) {
         }
     }else{
         showToast('Something went wrong.', 'danger');
+    }
+}
+
+/* ---------------------- mobile sidebar drawer ---------------------- */
+
+function toggleSidebar() {
+    $('#sideNevCol').toggleClass('open');
+    $('#sidebarOverlay').toggleClass('show');
+}
+
+function closeSidebar() {
+    $('#sideNevCol').removeClass('open');
+    $('#sidebarOverlay').removeClass('show');
+}
+
+function closeSidebarOnMobile() {
+    if (window.matchMedia('(max-width: 767.98px)').matches) {
+        closeSidebar();
     }
 }
