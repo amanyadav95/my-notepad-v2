@@ -95,6 +95,9 @@
                     </div>
                     <button id="newNote" type="button" class="btn btn-outline-secondary btn-sm w-100 mb-2 mt-2">+ New Note</button>
                     <div id="indexListing"></div>
+                    <button id="update-btn" style="display:none;">
+                        Update available — click to refresh
+                    </button>
                     <div class="input-group input-group-sm">
                         <input id="newNoteTitle" type="text"  class="form-control input-group-sm hide" placeholder="Type title here" maxlength="30">
                     </div>
@@ -124,6 +127,7 @@
     <script src="bootstrap.bundle.min.js"></script>
     <script src="jquery-4.0.0.min.js"></script>
     <script src="popper.min.js"></script>
+    <script src="pwa-update.js"></script>
     <script src="app.js"></script>
     <script>
         if ('serviceWorker' in navigator) {

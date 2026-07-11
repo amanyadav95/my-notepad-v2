@@ -41,14 +41,14 @@
   "screenshots": [
     {
       "src": "./desktop.png",
-      "sizes": "1280x800",
+      "sizes": "1920x885",
       "type": "image/png",
       "form_factor": "wide",
       "label": "UniApp on desktop"
     },
     {
       "src": "./mobile.png",
-      "sizes": "750x1334",
+      "sizes": "402x792",
       "type": "image/png",
       "label": "UniApp on mobile"
     }
