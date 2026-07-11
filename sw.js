@@ -1,5 +1,5 @@
 // Bump this on every deploy so the browser detects a byte-diff and installs a new SW
-const CACHE_NAME = 'my-app-cache-v-1.00';
+const CACHE_NAME = 'my-app-cache-v-1.01';
 
 const urlsToCache = [
   '/',

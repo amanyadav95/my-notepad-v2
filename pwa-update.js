@@ -14,7 +14,7 @@
   }
 
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').then((reg) => {
+    navigator.serviceWorker.register('sw.js').then((reg) => {
 
       // Case 1: a new SW is already waiting when the page loads
       if (reg.waiting) {
