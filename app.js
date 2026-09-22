@@ -119,14 +119,14 @@ function updateIndex(type) {
 }
 
 $('#newNote').click(function() {
-    $("#newNoteTitle").show();
+    $('#newNoteTitle, #newNoteAdd').show();
 });
 
 $('#newNoteTitle').on('blur', function() {
     let newNote = ($('#newNoteTitle').val()).replaceAll(" ", "-");
     if (newNote != '') {
         if (notes[newNote] == undefined) {
-            notes[newNote] = [];
+            notes = { [newNote]: [], ...notes }; // new note appears on top of the list
             updateIndex('note');
             showIndex();
         }else {
@@ -134,7 +134,21 @@ $('#newNoteTitle').on('blur', function() {
         }
         $('#newNoteTitle').val('');
     }
-    $("#newNoteTitle").hide();
+    $('#newNoteTitle, #newNoteAdd').hide();
+});
+
+// Pressing Enter in the "new note" / "new file" inputs creates it,
+// doing exactly the same work as the blur handlers below
+$(document).on('keydown', '#newNoteTitle, .new-file-input', function(e) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        this.blur(); // fires the existing onblur / jQuery blur logic
+    }
+});
+
+// "Add" button next to the input does the same work as blur / Enter
+$('#newNoteAdd').on('click', function() {
+    $('#newNoteTitle').trigger('blur');
 });
 
 function showIndex() {
@@ -143,6 +157,7 @@ function showIndex() {
         let pagelist = `<button type="button" onclick="showNewFileInput('${titles}')" id="newFile-${titles}" class="btn btn-outline-primary btn-sm ${titles} m-1">+ file</button>
                         <div class="input-group input-group-sm">
                             <input onblur="createFile('${titles}')" id="newFileTitle-${titles}" type="text" class="form-control input-group-sm hide ${titles} new-file-input" placeholder="File Name" maxlength="60">
+                            <button type="button" id="newFileAdd-${titles}" class="btn btn-sm btn-outline-primary hide" onclick="createFile('${titles}')">Add</button>
                         </div>`;
         $.each(pages, function(key, pageName) {
             pagelist += `<button onclick="selectFile('${titles}','${key}')" id="${titles}-${key}" type="button" class="${(pageName == activePage && titles == activeNote) ? 'active-file' : ''} select-file list-group-item list-group-item-action btn-sm border-0">${pageName.replaceAll("-", " ")}
@@ -182,7 +197,7 @@ function selectNotee(ttl) {
 }
 
 function showNewFileInput(ttl) {
-    $(`#newFileTitle-${ttl}`).show();
+    $(`#newFileTitle-${ttl}, #newFileAdd-${ttl}`).show();
 }
 
 function createFile(ttl) {
@@ -192,12 +207,12 @@ function createFile(ttl) {
         if (notes[ttl].includes(fileName)) {
             showToast('File with this name already exist.', 'danger');
         }else{
-            notes[ttl].push(fileName);
+            notes[ttl].unshift(fileName); // new file appears on top of the list
             updateIndex('file');
             showIndex();
         }
     }
-    newFileInput.hide();
+    $(`#newFileTitle-${ttl}, #newFileAdd-${ttl}`).hide();
 }
 
 function selectFile(ttl, pgs) {

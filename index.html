@@ -71,6 +71,9 @@
             border-radius: 0;
         }
     }
+    .form-control:focus{
+        box-shadow: none;
+    }
 </style>
 <body>
     <div>
@@ -94,13 +97,14 @@
                         <button type="button" class="btn btn-sm btn-outline-secondary d-md-none close-sidebar-btn" onclick="closeSidebar()" aria-label="Close menu">&times;</button>
                     </div>
                     <button id="newNote" type="button" class="btn btn-outline-secondary btn-sm w-100 mb-2 mt-2">+ New Note</button>
+                    <div class="input-group input-group-sm mb-2">
+                        <input id="newNoteTitle" type="text"  class="form-control input-group-sm hide" placeholder="Type title here" maxlength="30">
+                        <button id="newNoteAdd" type="button" class="btn btn-sm btn-outline-primary hide">Add</button>
+                    </div>
                     <div id="indexListing"></div>
                     <button id="update-btn" type="button" class="btn btn-sm btn-outline-primary w-100 my-2" style="display:none;">
                         Update available — click to refresh
                     </button>
-                    <div class="input-group input-group-sm">
-                        <input id="newNoteTitle" type="text"  class="form-control input-group-sm hide" placeholder="Type title here" maxlength="30">
-                    </div>
                 </div>
             </div>
             </div>

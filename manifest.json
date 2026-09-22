@@ -37,20 +37,5 @@
   "background_color": "#f0f2f5",
   "theme_color": "#007bff",
   "display": "standalone",
-  "orientation": "portrait",
-  "screenshots": [
-    {
-      "src": "./desktop.png",
-      "sizes": "1920x885",
-      "type": "image/png",
-      "form_factor": "wide",
-      "label": "UniApp on desktop"
-    },
-    {
-      "src": "./mobile.png",
-      "sizes": "402x792",
-      "type": "image/png",
-      "label": "UniApp on mobile"
-    }
-  ]
+  "orientation": "portrait"
 }
