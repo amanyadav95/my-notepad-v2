@@ -87,6 +87,20 @@ function deleteFileFromStorage(ttl, pageName) {
     localStorage.removeItem(fileKey(ttl, pageName));
 }
 
+// Persist unsaved editor text before a PWA update reloads the page
+window.addEventListener('pwa:before-reload', function() {
+    try {
+        const editor = document.getElementById('fileText');
+        const saveBtn = document.getElementById('saveNote');
+        if (!editor || editor.disabled || !saveBtn) return;
+        if (saveBtn.textContent.trim() !== 'Save') return; // "Edit"/empty = nothing unsaved
+        if (!activeNote || !activePage) return;
+        if (editor.value) saveFileToStorage(activeNote, activePage, editor.value);
+    } catch (e) {
+        console.error('Failed to save before update reload', e);
+    }
+});
+
 /* -------------------------------------------------------------------- */
 
 $(document).ready(function() {

@@ -95,7 +95,7 @@
                     </div>
                     <button id="newNote" type="button" class="btn btn-outline-secondary btn-sm w-100 mb-2 mt-2">+ New Note</button>
                     <div id="indexListing"></div>
-                    <button id="update-btn" style="display:none;">
+                    <button id="update-btn" type="button" class="btn btn-sm btn-outline-primary w-100 my-2" style="display:none;">
                         Update available — click to refresh
                     </button>
                     <div class="input-group input-group-sm">
@@ -129,14 +129,5 @@
     <script src="popper.min.js"></script>
     <script src="pwa-update.js"></script>
     <script src="app.js"></script>
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js')
-                    .then(reg => console.log('Service Worker registered!', reg))
-                    .catch(err => console.log('Service Worker registration failed: ', err));
-            });
-        }
-    </script>
 </body>
 </html>
