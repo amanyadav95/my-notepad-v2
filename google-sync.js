@@ -17,6 +17,7 @@ const GS_INDEX_KEY = (typeof NOTES_INDEX_KEY !== 'undefined') ? NOTES_INDEX_KEY 
 const GS_FILE_PREFIX = (typeof FILE_KEY_PREFIX !== 'undefined') ? FILE_KEY_PREFIX : 'note_file_';
 const GS_USER_KEY = 'google_sync_user';
 const GS_LAST_SYNC_KEY = 'google_sync_last_sync';
+const GS_TOKEN_KEY = 'google_sync_token';
 
 let gsUser = null;
 let gsToken = null;
@@ -49,6 +50,32 @@ function gsReadUser() {
     } catch (e) {
         return null;
     }
+}
+
+// Access token survives page reloads (sessionStorage) so auto-sync keeps
+// working after an update-triggered reload without needing a popup
+function gsSaveToken(token, expiresAt) {
+    try {
+        sessionStorage.setItem(GS_TOKEN_KEY, JSON.stringify({ token: token, expiresAt: expiresAt }));
+    } catch (e) { /* ignore */ }
+}
+
+function gsLoadToken() {
+    try {
+        const raw = sessionStorage.getItem(GS_TOKEN_KEY);
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (data && data.token && data.expiresAt > Date.now()) {
+            gsToken = data.token;
+            gsTokenExpiresAt = data.expiresAt;
+            return gsToken;
+        }
+    } catch (e) { /* ignore */ }
+    return null;
+}
+
+function gsClearToken() {
+    try { sessionStorage.removeItem(GS_TOKEN_KEY); } catch (e) { /* ignore */ }
 }
 
 function gsRelativeTime(d) {
@@ -143,9 +170,13 @@ function gsRequestToken(prompt) {
                     if (resp && resp.access_token) {
                         gsToken = resp.access_token;
                         gsTokenExpiresAt = Date.now() + Math.max(60, (resp.expires_in || 3600) - 60) * 1000;
+                        gsSaveToken(gsToken, gsTokenExpiresAt);
                         resolve(gsToken);
                     } else {
-                        console.warn('[GS] no access token', resp && resp.error);
+                        // interaction_required is the normal "not granted yet" answer
+                        if (resp && resp.error !== 'interaction_required') {
+                            console.warn('[GS] no access token', resp.error);
+                        }
                         resolve(null);
                     }
                 },
@@ -163,10 +194,12 @@ function gsRequestToken(prompt) {
 
 async function gsEnsureToken(interactive) {
     if (gsToken && Date.now() < gsTokenExpiresAt) return gsToken;
-    let token = await gsRequestToken('');          // silent (already granted?)
-    if (!token && interactive) {
-        token = await gsRequestToken('consent');   // show the consent screen
-    }
+    // Auto-sync must NEVER open a popup (no user gesture = browser blocks it),
+    // so non-interactive requests only use a stored token
+    if (!interactive) return gsLoadToken();
+    // Button clicks have a user gesture: try silent first, then consent
+    let token = await gsRequestToken('none');
+    if (!token) token = await gsRequestToken('consent');
     return token;
 }
 
@@ -175,6 +208,7 @@ function gsSignOut() {
     gsToken = null;
     gsTokenExpiresAt = 0;
     localStorage.removeItem(GS_USER_KEY);
+    gsClearToken();
     gsUser = null;
     clearTimeout(gsSyncTimer);
     if (window.google && google.accounts) {
@@ -378,6 +412,7 @@ function gsWhenGisReady(callback, tries) {
 
 window.addEventListener('load', function() {
     gsUser = gsReadUser();
+    if (gsUser) gsLoadToken();
     gsUpdateUserUi();
 
     gsWhenGisReady(function() {
