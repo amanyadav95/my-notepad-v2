@@ -18,6 +18,7 @@ const GS_FILE_PREFIX = (typeof FILE_KEY_PREFIX !== 'undefined') ? FILE_KEY_PREFI
 const GS_USER_KEY = 'google_sync_user';
 const GS_LAST_SYNC_KEY = 'google_sync_last_sync';
 const GS_TOKEN_KEY = 'google_sync_token';
+const GS_GRANTED_KEY = 'google_sync_granted';
 
 let gsUser = null;
 let gsToken = null;
@@ -171,6 +172,7 @@ function gsRequestToken(prompt) {
                         gsToken = resp.access_token;
                         gsTokenExpiresAt = Date.now() + Math.max(60, (resp.expires_in || 3600) - 60) * 1000;
                         gsSaveToken(gsToken, gsTokenExpiresAt);
+                        localStorage.setItem(GS_GRANTED_KEY, '1');
                         resolve(gsToken);
                     } else {
                         // interaction_required is the normal "not granted yet" answer
@@ -197,10 +199,16 @@ async function gsEnsureToken(interactive) {
     // Auto-sync must NEVER open a popup (no user gesture = browser blocks it),
     // so non-interactive requests only use a stored token
     if (!interactive) return gsLoadToken();
-    // Button clicks have a user gesture: try silent first, then consent
-    let token = await gsRequestToken('none');
-    if (!token) token = await gsRequestToken('consent');
-    return token;
+    // First-ever grant: go STRAIGHT to consent — one popup, gesture intact.
+    // (Trying a silent attempt first could spend the click's popup permission.)
+    if (localStorage.getItem(GS_GRANTED_KEY) !== '1') {
+        return gsRequestToken('consent');
+    }
+    // Already granted before: try silent, fall back to consent if that fails
+    const silent = await gsRequestToken('none');
+    if (silent) return silent;
+    localStorage.removeItem(GS_GRANTED_KEY); // consent is needed again next click
+    return gsRequestToken('consent');
 }
 
 function gsSignOut() {
@@ -208,6 +216,7 @@ function gsSignOut() {
     gsToken = null;
     gsTokenExpiresAt = 0;
     localStorage.removeItem(GS_USER_KEY);
+    localStorage.removeItem(GS_GRANTED_KEY); // token was revoked → consent needed again
     gsClearToken();
     gsUser = null;
     clearTimeout(gsSyncTimer);
@@ -227,12 +236,19 @@ function gsAuthHeaders(token) {
     return { Authorization: 'Bearer ' + token };
 }
 
+function gsApiError(what, status) {
+    let hint = '';
+    if (status === 403) hint = ' — the Google Drive API may be disabled: enable it in Cloud Console → APIs & Services → Library → Google Drive API';
+    else if (status === 401) hint = ' — session expired, click "Sync now" again';
+    throw new Error(what + ' (' + status + ')' + hint);
+}
+
 async function gsFindBackup(token) {
     const q = "name='" + GS_CONFIG.backupFileName + "' and trashed=false";
     const url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) +
                 '&fields=files(id,name,modifiedTime)';
     const r = await fetch(url, { headers: gsAuthHeaders(token) });
-    if (!r.ok) throw new Error('Drive list failed (' + r.status + ')');
+    if (!r.ok) gsApiError('Drive list failed', r.status);
     const data = await r.json();
     return (data.files && data.files.length) ? data.files[0].id : null;
 }
@@ -273,7 +289,7 @@ async function gsCreateFile(token, payload) {
         headers: gsAuthHeaders(token),
         body: body
     });
-    if (!r.ok) throw new Error('Drive create failed (' + r.status + ')');
+    if (!r.ok) gsApiError('Drive create failed', r.status);
 }
 
 async function gsUpdateFile(token, fileId, payload) {
@@ -282,14 +298,14 @@ async function gsUpdateFile(token, fileId, payload) {
         headers: Object.assign(gsAuthHeaders(token), { 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload)
     });
-    if (!r.ok) throw new Error('Drive update failed (' + r.status + ')');
+    if (!r.ok) gsApiError('Drive update failed', r.status);
 }
 
 async function gsDownload(token, fileId) {
     const r = await fetch('https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media', {
         headers: gsAuthHeaders(token)
     });
-    if (!r.ok) throw new Error('Backup download failed (' + r.status + ')');
+    if (!r.ok) gsApiError('Backup download failed', r.status);
     return r.json();
 }
 
@@ -451,3 +467,21 @@ window.addEventListener('load', function() {
     // Keep "Last synced: x ago" fresh
     setInterval(function() { if (gsUser) gsRenderLastSync(); }, 60000);
 });
+
+/* --------------------- debug handle (console use) ----------------------- */
+window.myNotepadGoogle = {
+    state: function() {
+        return {
+            signedIn: !!gsUser,
+            name: gsUser ? gsUser.name : null,
+            clientIdSet: GS_CONFIG.clientId.indexOf('YOUR_CLIENT_ID') !== 0,
+            grantedBefore: localStorage.getItem(GS_GRANTED_KEY) === '1',
+            tokenValid: !!(gsToken && Date.now() < gsTokenExpiresAt),
+            tokenExpiresInSec: gsToken ? Math.max(0, Math.round((gsTokenExpiresAt - Date.now()) / 1000)) : 0,
+            lastSync: localStorage.getItem(GS_LAST_SYNC_KEY)
+        };
+    },
+    sync: function() { return gsSyncToDrive(true); },
+    restore: function() { return gsRestoreFromGoogle(); },
+    signOut: function() { gsSignOut(); }
+};
