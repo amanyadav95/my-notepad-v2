@@ -108,6 +108,10 @@ window.addEventListener('pwa:before-reload', function() {
 $(document).ready(function() {
     notes = loadNotesFromStorage();
     showIndex();
+    // Phone mode: open the notes drawer on start for easy note selection
+    if (window.matchMedia('(max-width: 767.98px)').matches) {
+        openSidebar();
+    }
 });
 
 function updateIndex(type) {
@@ -318,6 +322,11 @@ function deleteFile(event, ttl, pgs) {
 }
 
 /* ---------------------- mobile sidebar drawer ---------------------- */
+
+function openSidebar() {
+    $('#sideNevCol').addClass('open');
+    $('#sidebarOverlay').addClass('show');
+}
 
 function toggleSidebar() {
     $('#sideNevCol').toggleClass('open');

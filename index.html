@@ -10,8 +10,36 @@
 </head>
 <style>
     .side-nev {
-        min-height: 685px;
+        min-height: 665px !important;
+        /* Sidebar = full viewport height (leaves room for row margin + footer);
+           the card body inside scrolls when content is taller */
+        height: calc(100vh - 4rem);
+        height: calc(100dvh - 4rem);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
     }
+    .side-nev .card-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto; /* safety net — normally only #indexListing scrolls */
+    }
+    /* Only the notes list scrolls; it takes all remaining sidebar height */
+    #indexListing {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        scrollbar-width: thin;              /* Firefox */
+        scrollbar-color: #adb5bd transparent;
+    }
+    /* Thin 4px scrollbar (Chrome / Edge / Safari) */
+    #indexListing::-webkit-scrollbar { width: 4px; }
+    #indexListing::-webkit-scrollbar-track { background: transparent; }
+    #indexListing::-webkit-scrollbar-thumb { background: #adb5bd; border-radius: 2px; }
+    #indexListing::-webkit-scrollbar-thumb:hover { background: #86939e; }
     .hide{
         display: none;
     }
@@ -70,6 +98,9 @@
             height: 100%;
             border-radius: 0;
         }
+        .side-nev h3 {
+            font-size: 1rem; /* match the mobile top bar branding size */
+        }
     }
     .form-control:focus{
         box-shadow: none;
@@ -93,7 +124,7 @@
             <div class="card side-nev">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center">
-                        <h3 class="text-light-emphasis mb-0 d-none d-md-block">My-NoTeS</h3>
+                        <h3 class="text-light-emphasis mb-0">My-NoTeS</h3>
                         <button type="button" class="btn btn-sm btn-outline-secondary d-md-none close-sidebar-btn" onclick="closeSidebar()" aria-label="Close menu">&times;</button>
                     </div>
                     <button id="newNote" type="button" class="btn btn-outline-secondary btn-sm w-100 mb-2 mt-2">+ New Note</button>
@@ -134,7 +165,10 @@
                   <input type="text" id="fileTitle" class="form-control" placeholder="Title" aria-label="Title" aria-describedby="saveNote" disabled>
                   <button class="btn btn-outline-secondary" type="button" id="saveNote"></button>
                 </div>
-                <textarea class="form-control" id="fileText" rows="26" disabled></textarea>
+                <textarea class="form-control" id="fileText" rows="24" disabled></textarea>
+                <footer class="text-center text-muted small border-top py-2 mt-2">
+                    <a href="terms.html" class="text-decoration-none text-muted">Terms &amp; Conditions</a>
+                </footer>
               </div>
             </div>
         </div>
