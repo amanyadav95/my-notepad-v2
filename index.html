@@ -105,6 +105,26 @@
                     <button id="update-btn" type="button" class="btn btn-sm btn-outline-primary w-100 my-2" style="display:none;">
                         Update available — click to refresh
                     </button>
+                    <div id="gsSection" class="border-top mt-2 pt-2">
+                        <small class="text-muted fw-semibold d-block mb-1">Google Sync</small>
+                        <div id="gsSignedOut">
+                            <div id="gsGoogleBtn" aria-labelledby="button-label"></div>
+                            <span id="button-label" class="visually-hidden">Sign in with Google</span>
+                            <small class="text-muted d-block mt-1">Sign in to back up your notes to your Google Drive.</small>
+                        </div>
+                        <div id="gsSignedIn" style="display:none;">
+                            <div class="d-flex align-items-center mb-2">
+                                <img id="gsAvatar" src="" alt="" class="rounded-circle me-2" width="24" height="24" onerror="this.style.display='none'">
+                                <small id="gsName" class="text-truncate fw-semibold"></small>
+                            </div>
+                            <div class="d-flex gap-1">
+                                <button id="gsSyncNow" type="button" class="btn btn-sm btn-outline-primary flex-fill">Sync now</button>
+                                <button id="gsRestore" type="button" class="btn btn-sm btn-outline-secondary flex-fill">Restore</button>
+                            </div>
+                            <button id="gsSignOut" type="button" class="btn btn-sm btn-outline-danger w-100 mt-1">Sign out</button>
+                            <small id="gsLastSync" class="text-muted d-block mt-1"></small>
+                        </div>
+                    </div>
                 </div>
             </div>
             </div>
@@ -133,5 +153,7 @@
     <script src="popper.min.js"></script>
     <script src="pwa-update.js"></script>
     <script src="app.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async></script>
+    <script src="google-sync.js"></script>
 </body>
 </html>

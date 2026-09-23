@@ -52,6 +52,7 @@ function loadNotesFromStorage() {
 function saveNotesToStorage() {
     try {
         localStorage.setItem(NOTES_INDEX_KEY, JSON.stringify(notes));
+        if (typeof scheduleSync === 'function') scheduleSync(); // Google Drive auto-sync
         return true;
     } catch (e) {
         console.error('Failed to save notes index', e);
@@ -66,6 +67,7 @@ function saveFileToStorage(ttl, pageName, text) {
             page_name: pageName,
             text_note: text
         }));
+        if (typeof scheduleSync === 'function') scheduleSync(); // Google Drive auto-sync
         return true;
     } catch (e) {
         console.error('Failed to save file data', e);

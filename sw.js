@@ -1,5 +1,5 @@
 // Bump this on every deploy so the browser detects a byte-diff and installs a new SW
-const CACHE_NAME = 'my-app-cache-v-1.05';
+const CACHE_NAME = 'my-app-cache-v-1.07';
 
 // Paths are relative to sw.js so precaching also works from a sub-folder (e.g. /my-notepad-v2/)
 const urlsToCache = [
@@ -10,6 +10,7 @@ const urlsToCache = [
   './jquery-4.0.0.min.js',
   './popper.min.js',
   './pwa-update.js',
+  './google-sync.js',
   './app.js',
   './manifest.json',
   './favicon.svg',
