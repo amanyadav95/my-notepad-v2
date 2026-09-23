@@ -7,7 +7,7 @@
 
 const GS_CONFIG = {
     // >>> PASTE YOUR WEB APPLICATION OAUTH CLIENT ID HERE <<<
-    clientId: '362568772028-808kdvomrf62g9hgne72373p7guqmsc0.apps.googleusercontent.com',
+    clientId: '362568772028-mff6hpvilde2k34vpmel72d14501c735.apps.googleusercontent.com',
     backupFileName: 'my-notepad-backup.json',
     scope: 'https://www.googleapis.com/auth/drive.file'
 };
