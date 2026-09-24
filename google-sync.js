@@ -19,6 +19,7 @@ const GS_USER_KEY = 'google_sync_user';
 const GS_LAST_SYNC_KEY = 'google_sync_last_sync';
 const GS_TOKEN_KEY = 'google_sync_token';
 const GS_GRANTED_KEY = 'google_sync_granted';
+const GS_ERROR_KEY = 'google_sync_last_error';
 
 let gsUser = null;
 let gsToken = null;
@@ -120,7 +121,27 @@ function gsRenderLastSync() {
 
 function gsMarkSynced() {
     localStorage.setItem(GS_LAST_SYNC_KEY, new Date().toISOString());
+    gsSetError(null);
     gsRenderLastSync();
+}
+
+/* Persistent on-page status: every failure is shown in the sidebar so the
+   exact cause is visible without opening the browser console */
+function gsRenderError() {
+    const el = document.getElementById('gsError');
+    if (!el) return;
+    let msg = '';
+    try { msg = localStorage.getItem(GS_ERROR_KEY) || ''; } catch (e) { msg = ''; }
+    el.textContent = msg;
+    el.style.display = msg ? 'block' : 'none';
+}
+
+function gsSetError(msg) {
+    try {
+        if (msg) localStorage.setItem(GS_ERROR_KEY, msg);
+        else localStorage.removeItem(GS_ERROR_KEY);
+    } catch (e) { /* ignore */ }
+    gsRenderError();
 }
 
 function gsSetSyncing(isSyncing) {
@@ -152,6 +173,7 @@ function gsHandleCredential(response) {
     gsUser = user;
     localStorage.setItem(GS_USER_KEY, JSON.stringify(gsUser));
     gsUpdateUserUi();
+    gsSetError(null); // fresh sign-in: clear any old error
     // Instruction toast doubles as the consent hint for the first sync
     gsConsentHintShown = true;
     gsToast('Signed in as ' + gsUser.name + '. Click "Sync now" to allow Drive access.', 'info');
@@ -174,16 +196,27 @@ function gsRequestToken(prompt) {
                         gsSaveToken(gsToken, gsTokenExpiresAt);
                         localStorage.setItem(GS_GRANTED_KEY, '1');
                         resolve(gsToken);
-                    } else {
+                    } else if (resp && resp.error && resp.error !== 'interaction_required') {
                         // interaction_required is the normal "not granted yet" answer
-                        if (resp && resp.error !== 'interaction_required') {
-                            console.warn('[GS] no access token', resp.error);
-                        }
+                        console.warn('[GS] no access token', resp.error);
+                        gsSetError(resp.error === 'access_denied'
+                            ? 'Google denied access — add your account under Cloud Console → OAuth consent screen → Test users'
+                            : 'Google token error: ' + resp.error);
+                        resolve(null);
+                    } else {
                         resolve(null);
                     }
                 },
                 error_callback: function(err) {
                     console.error('[GS] token request error', err);
+                    const t = err && err.type;
+                    if (t === 'popup_failed_to_open') {
+                        gsSetError('Google popup was blocked — allow popups for this site, then click "Sync now" again');
+                    } else if (t === 'popup_closed') {
+                        gsSetError('Google popup was closed before finishing — click "Sync now" again');
+                    } else {
+                        gsSetError('Google sign-in problem' + (t ? ': ' + t : ''));
+                    }
                     resolve(null);
                 }
             });
@@ -218,6 +251,7 @@ function gsSignOut() {
     localStorage.removeItem(GS_USER_KEY);
     localStorage.removeItem(GS_GRANTED_KEY); // token was revoked → consent needed again
     gsClearToken();
+    gsSetError(null);
     gsUser = null;
     clearTimeout(gsSyncTimer);
     if (window.google && google.accounts) {
@@ -316,10 +350,16 @@ async function gsSyncToDrive(interactive) {
     const token = await gsEnsureToken(interactive);
     if (!token) {
         if (interactive) {
+            // Don't overwrite a more specific error set during the token request
+            try {
+                if (!localStorage.getItem(GS_ERROR_KEY)) {
+                    gsSetError('Drive permission not granted yet — a Google popup must open and be approved. If none appeared, allow popups for this site.');
+                }
+            } catch (e) { /* ignore */ }
             gsToast('Google permission is required to sync.', 'danger');
         } else if (!gsConsentHintShown) {
             gsConsentHintShown = true;
-            gsToast('Google sync needs one-time permission — click "Sync now".', 'info');
+            gsToast('Google sync needs one-time permission — click "Sync now" in the sidebar.', 'info');
         }
         return false;
     }
@@ -333,6 +373,7 @@ async function gsSyncToDrive(interactive) {
         return true;
     } catch (e) {
         console.error('[GS] sync failed:', e);
+        gsSetError(e.message || String(e));
         if (interactive) gsToast('Google sync failed: ' + (e.message || e), 'danger');
         return false;
     }
@@ -397,6 +438,7 @@ async function gsRestoreFromGoogle() {
         gsToast('Backup restored from Google Drive.', 'success');
     } catch (e) {
         console.error('[GS] restore failed:', e);
+        gsSetError(e.message || String(e));
         gsToast('Restore failed: ' + (e.message || e), 'danger');
     }
 }
@@ -430,6 +472,7 @@ window.addEventListener('load', function() {
     gsUser = gsReadUser();
     if (gsUser) gsLoadToken();
     gsUpdateUserUi();
+    gsRenderError();
 
     gsWhenGisReady(function() {
         try {
