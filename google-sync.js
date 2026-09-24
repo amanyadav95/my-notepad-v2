@@ -483,5 +483,24 @@ window.myNotepadGoogle = {
     },
     sync: function() { return gsSyncToDrive(true); },
     restore: function() { return gsRestoreFromGoogle(); },
-    signOut: function() { gsSignOut(); }
+    signOut: function() { gsSignOut(); },
+    // Ask Drive directly with the current token and print the raw answer
+    probe: function() {
+        const token = gsToken || gsLoadToken();
+        if (!token) {
+            console.log('[probe] No access token yet — click "Sync now" and approve once, then re-run myNotepadGoogle.probe()');
+            return Promise.resolve(null);
+        }
+        const url = 'https://www.googleapis.com/drive/v3/files?q=' +
+            encodeURIComponent("name='" + GS_CONFIG.backupFileName + "' and trashed=false") +
+            '&fields=files(id,name,modifiedTime)';
+        return fetch(url, { headers: gsAuthHeaders(token) }).then(function(r) {
+            console.log('[probe] HTTP', r.status, r.statusText);
+            return r.text().then(function(t) {
+                try { console.log('[probe] body', JSON.parse(t)); }
+                catch (e) { console.log('[probe] body', t); }
+                return t;
+            });
+        });
+    }
 };
