@@ -110,6 +110,7 @@ function gsUpdateUserUi() {
         signedOut.style.display = 'block';
         signedIn.style.display = 'none';
     }
+    gsRefreshPermissionPulse();
 }
 
 function gsRenderLastSync() {
@@ -134,6 +135,14 @@ function gsRenderError() {
     try { msg = localStorage.getItem(GS_ERROR_KEY) || ''; } catch (e) { msg = ''; }
     el.textContent = msg;
     el.style.display = msg ? 'block' : 'none';
+}
+
+/* Pulsing "Sync now" while Drive permission is still missing */
+function gsRefreshPermissionPulse() {
+    const btn = document.getElementById('gsSyncNow');
+    if (!btn) return;
+    const needs = !!gsUser && localStorage.getItem(GS_GRANTED_KEY) !== '1';
+    btn.classList.toggle('gs-needs-permission', needs);
 }
 
 function gsSetError(msg) {
@@ -195,6 +204,7 @@ function gsRequestToken(prompt) {
                         gsTokenExpiresAt = Date.now() + Math.max(60, (resp.expires_in || 3600) - 60) * 1000;
                         gsSaveToken(gsToken, gsTokenExpiresAt);
                         localStorage.setItem(GS_GRANTED_KEY, '1');
+                        gsRefreshPermissionPulse();
                         resolve(gsToken);
                     } else if (resp && resp.error && resp.error !== 'interaction_required') {
                         // interaction_required is the normal "not granted yet" answer

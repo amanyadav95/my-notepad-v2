@@ -105,6 +105,15 @@
     .form-control:focus{
         box-shadow: none;
     }
+    /* Sync-now pulse: visible reminder while Drive permission is still missing */
+    @keyframes gsPermissionPulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(13, 110, 253, .45); }
+        50% { box-shadow: 0 0 0 6px rgba(13, 110, 253, 0); }
+    }
+    #gsSyncNow.gs-needs-permission {
+        font-weight: 600;
+        animation: gsPermissionPulse 1.5s infinite;
+    }
 </style>
 <body>
     <div>
