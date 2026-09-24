@@ -192,32 +192,51 @@ function gsHandleCredential(response) {
     });
 }
 
+let gsTokenResolve = null; // resolver of the token request currently in flight
+
+/* Global token-response callback: requestAccessToken() only delivers to this
+   one callback (a per-request "callback" is ignored by GIS) */
+function gsDeliverToken(resp) {
+    if (resp && resp.access_token) {
+        gsToken = resp.access_token;
+        gsTokenExpiresAt = Date.now() + Math.max(60, (resp.expires_in || 3600) - 60) * 1000;
+        gsSaveToken(gsToken, gsTokenExpiresAt);
+        localStorage.setItem(GS_GRANTED_KEY, '1');
+        gsRefreshPermissionPulse();
+    } else if (resp && resp.error && resp.error !== 'interaction_required') {
+        // interaction_required is the normal "not granted yet" answer
+        console.warn('[GS] no access token', resp.error);
+        gsSetError(resp.error === 'access_denied'
+            ? 'Google denied access — add your account under Cloud Console → OAuth consent screen → Test users'
+            : 'Google token error: ' + resp.error);
+    }
+    const done = gsTokenResolve;
+    gsTokenResolve = null;
+    if (done) done(resp && resp.access_token ? gsToken : null);
+}
+
 function gsRequestToken(prompt) {
     return new Promise(function(resolve) {
         if (!gsTokenClient) return resolve(null);
+        let finished = false;
+        function settle(v) {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            resolve(v);
+        }
+        // Safety net: never leave the UI hanging if Google's response is lost
+        const timer = setTimeout(function() {
+            if (gsTokenResolve === settle) gsTokenResolve = null;
+            gsSetError('Google did not respond — click "Sync now" again');
+            settle(null);
+        }, 180000);
         try {
+            gsTokenResolve = settle; // responses arrive at the GLOBAL callback (see gsDeliverToken)
             gsTokenClient.requestAccessToken({
                 prompt: prompt,
-                callback: function(resp) {
-                    if (resp && resp.access_token) {
-                        gsToken = resp.access_token;
-                        gsTokenExpiresAt = Date.now() + Math.max(60, (resp.expires_in || 3600) - 60) * 1000;
-                        gsSaveToken(gsToken, gsTokenExpiresAt);
-                        localStorage.setItem(GS_GRANTED_KEY, '1');
-                        gsRefreshPermissionPulse();
-                        resolve(gsToken);
-                    } else if (resp && resp.error && resp.error !== 'interaction_required') {
-                        // interaction_required is the normal "not granted yet" answer
-                        console.warn('[GS] no access token', resp.error);
-                        gsSetError(resp.error === 'access_denied'
-                            ? 'Google denied access — add your account under Cloud Console → OAuth consent screen → Test users'
-                            : 'Google token error: ' + resp.error);
-                        resolve(null);
-                    } else {
-                        resolve(null);
-                    }
-                },
                 error_callback: function(err) {
+                    if (gsTokenResolve === settle) gsTokenResolve = null;
                     console.error('[GS] token request error', err);
                     const t = err && err.type;
                     if (t === 'popup_failed_to_open') {
@@ -227,12 +246,13 @@ function gsRequestToken(prompt) {
                     } else {
                         gsSetError('Google sign-in problem' + (t ? ': ' + t : ''));
                     }
-                    resolve(null);
+                    settle(null);
                 }
             });
         } catch (e) {
+            if (gsTokenResolve === settle) gsTokenResolve = null;
             console.error('[GS] token request failed', e);
-            resolve(null);
+            settle(null);
         }
     });
 }
@@ -501,7 +521,9 @@ window.addEventListener('load', function() {
             gsTokenClient = google.accounts.oauth2.initTokenClient({
                 client_id: GS_CONFIG.clientId,
                 scope: GS_CONFIG.scope,
-                callback: function() { /* per-request callbacks are used instead */ }
+                // Per-request "callback" is NOT supported by GIS — every token
+                // response is delivered to this global callback only
+                callback: gsDeliverToken
             });
         } catch (e) {
             console.error('[GS] Init failed — check GS_CONFIG.clientId:', e);
