@@ -166,11 +166,12 @@ function showIndex() {
                             <button type="button" id="newFileAdd-${titles}" class="btn btn-sm btn-outline-primary hide" onclick="createFile('${titles}')">Add</button>
                         </div>`;
         $.each(pages, function(key, pageName) {
-            pagelist += `<button onclick="selectFile('${titles}','${key}')" id="${titles}-${key}" type="button" class="${(pageName == activePage && titles == activeNote) ? 'active-file' : ''} select-file list-group-item list-group-item-action btn-sm border-0">${pageName.replaceAll("-", " ")}
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-file-earmark-text" viewBox="0 0 16 16">
+            pagelist += `<button onclick="selectFile('${titles}','${key}')" id="${titles}-${key}" type="button" class="${(pageName == activePage && titles == activeNote) ? 'active-file' : ''} select-file list-group-item list-group-item-action btn-sm border-0">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-file-earmark-text me-1" viewBox="0 0 16 16">
                                 <path d="M5.5 7a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1zM5 9.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m0 2a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 0 1h-2a.5.5 0 0 1-.5-.5"/>
                                 <path d="M9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.5zm0 1v2A1.5 1.5 0 0 0 11 4.5h2V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z"/>
                             </svg>
+                            ${pageName.replaceAll("-", " ")}
                             <span onclick="deleteFile(event, '${titles}','${key}')" class="delete-file-btn float-end text-danger" title="Delete file">&times;</span>
                         </button>`;
         })
@@ -267,58 +268,104 @@ function viewPage(pageData) {
 
 function deleteNote(event, ttl) {
     event.stopPropagation();
-    if (!confirm(`Delete note "${ttl.replaceAll("-", " ")}" and all its files? This cannot be undone.`)) {
-        return;
-    }
+    showConfirmToast(`Delete note "${ttl.replaceAll("-", " ")}" and all its files? This cannot be undone.`, function(confirmed) {
+        // User confirmed - proceed with deletion
+        if (!confirmed) return;
+        (notes[ttl] || []).forEach(function(pageName) {
+            deleteFileFromStorage(ttl, pageName);
+        });
 
-    (notes[ttl] || []).forEach(function(pageName) {
-        deleteFileFromStorage(ttl, pageName);
-    });
+        delete notes[ttl];
+        const ok = saveNotesToStorage();
 
-    delete notes[ttl];
-    const ok = saveNotesToStorage();
-
-    if (ok) {
-        if (activeNote === ttl) {
-            activeNote = '';
-            activePage = '';
-            $('#fileTitle').val('');
-            $('#fileText').val('').prop('disabled', true);
-            $("#saveNote").text('');
+        if (ok) {
+            if (activeNote === ttl) {
+                activeNote = '';
+                activePage = '';
+                $('#fileTitle').val('');
+                $('#fileText').val('').prop('disabled', true);
+                $("#saveNote").text('');
+            }
+            showToast('Note deleted.', 'success');
+            showIndex();
+        } else {
+            showToast('Something went wrong.', 'danger');
         }
-        showToast('Note deleted.', 'success');
-        showIndex();
-    }else{
-        showToast('Something went wrong.', 'danger');
-    }
+    });
 }
 
 function deleteFile(event, ttl, pgs) {
     event.stopPropagation();
     const pageName = notes[ttl][pgs];
-    if (!confirm(`Delete file "${pageName.replaceAll("-", " ")}"? This cannot be undone.`)) {
+    showConfirmToast(
+        `Delete file "${pageName.replaceAll("-", " ")}"? This cannot be undone.`,
+        function(confirmed) {
+            // User confirmed - proceed with deletion
+            if (!confirmed) return;
+            deleteFileFromStorage(ttl, pageName);
+            notes[ttl].splice(pgs, 1);
+            const ok = saveNotesToStorage();
+
+            if (ok) {
+                if (activeNote === ttl && activePage === pageName) {
+                    activePage = '';
+                    $('#fileTitle').val('');
+                    $('#fileText').val('').prop('disabled', true);
+                    $("#saveNote").text('');
+                }
+                showToast('File deleted.', 'success');
+                showIndex();
+                if (activeNote === ttl) {
+                    selectNotee(ttl);
+                }
+            } else {
+                showToast('Something went wrong.', 'danger');
+            }
+        }
+    );
+}
+
+/**
+ * Show a toast-based confirmation dialog.
+ * The toast stays open until the user clicks a button.
+ * @param {string} message - The confirmation message
+ * @param {Function} onConfirmed - Called with true when "Take action" clicked, false when "Close" clicked
+ */
+function showConfirmToast(message, onConfirmed) {
+    const toastEl = document.getElementById('confirmToast');
+    const toastBody = document.getElementById('confirmToastBody');
+    const toastTakeAction = document.getElementById('toastTakeAction');
+    const toastCloseBtn = document.getElementById('toastCloseBtn');
+
+    if (!toastEl || !toastBody) {
+        // Fallback: element missing (e.g. stale cached page) — fall back to browser confirm
+        onConfirmed(confirm(message));
         return;
     }
 
-    deleteFileFromStorage(ttl, pageName);
-    notes[ttl].splice(pgs, 1);
-    const ok = saveNotesToStorage();
+    toastBody.innerText = message;
 
-    if (ok) {
-        if (activeNote === ttl && activePage === pageName) {
-            activePage = '';
-            $('#fileTitle').val('');
-            $('#fileText').val('').prop('disabled', true);
-            $("#saveNote").text('');
-        }
-        showToast('File deleted.', 'success');
-        showIndex();
-        if (activeNote === ttl) {
-            selectNotee(ttl);
-        }
-    }else{
-        showToast('Something went wrong.', 'danger');
+    // Reuse the existing Bootstrap Toast instance if one exists on this element
+    let bsToast = bootstrap.Toast.getInstance ? bootstrap.Toast.getInstance(toastEl) : null;
+    if (!bsToast) {
+        bsToast = new bootstrap.Toast(toastEl, { autohide: true, delay: 8000 });
     }
+
+    // "Take action" — confirm and close
+    toastTakeAction.onclick = function() {
+        bsToast.hide();
+        onConfirmed(true);
+    };
+
+    // "Close" — cancel and close
+    if (toastCloseBtn) {
+        toastCloseBtn.onclick = function() {
+            bsToast.hide();
+            onConfirmed(false);
+        };
+    }
+
+    bsToast.show();
 }
 
 /* ---------------------- mobile sidebar drawer ---------------------- */

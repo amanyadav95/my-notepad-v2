@@ -114,9 +114,45 @@
         font-weight: 600;
         animation: gsPermissionPulse 1.5s infinite;
     }
+
+    /* ---- Editor fills the screen height ----
+       Page stacks as: [mobile top bar] + [row], total = viewport height.
+       The row grows to fill the leftover space, and the textarea stretches
+       inside it, so the footer always sits at the bottom of the screen. */
+    .app-wrap {
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+        min-height: 100dvh;
+    }
+    .app-wrap > .row {
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+    .editor-col {
+        display: flex;
+        min-height: 0;
+    }
+    .editor-wrap {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+    /* Title bar and footer keep their natural size */
+    .editor-wrap .input-group,
+    .editor-wrap footer {
+        flex: 0 0 auto;
+    }
+    /* Textarea takes all remaining vertical space */
+    #fileText {
+        flex: 1 1 auto;
+        min-height: 120px;
+        resize: none;
+    }
 </style>
 <body>
-    <div>
+    <div class="app-wrap">
         <!-- Mobile top bar: only visible below md breakpoint -->
         <div class="d-md-none d-flex align-items-center p-2 border-bottom mobile-topbar">
             <button id="sidebarToggle" class="btn btn-outline-secondary btn-sm me-2" type="button" onclick="toggleSidebar()" aria-label="Toggle notes menu">
@@ -169,15 +205,18 @@
                 </div>
             </div>
             </div>
-            <div class="col-12 col-md-9 col-lg-10">
-              <div class="">
+            <div class="col-12 col-md-9 col-lg-10 editor-col">
+              <div class="editor-wrap">
                 <div class="input-group mb-1">
                   <input type="text" id="fileTitle" class="form-control" placeholder="Title" aria-label="Title" aria-describedby="saveNote" disabled>
                   <button class="btn btn-outline-secondary" type="button" id="saveNote"></button>
                 </div>
                 <textarea class="form-control" id="fileText" rows="24" disabled></textarea>
                 <footer class="text-center text-muted small border-top py-2 mt-2">
-                    <a href="terms.html" class="text-decoration-none text-muted">Terms &amp; Conditions</a>
+                    <a href="http://www.linkedin.com/in/aman-yadav-3ab0a018a" class="float-end text-decoration-none" style="margin-left: 10px" target="_blank" rel="noopener noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-linkedin" viewBox="0 0 16 16">
+                    <path d="M0 1.146C0 .513.526 0 1.175 0h13.65C15.474 0 16 .513 16 1.146v13.708c0 .633-.526 1.146-1.175 1.146H1.175C.526 16 0 15.487 0 14.854zm4.943 12.248V6.169H2.542v7.225zm-1.2-8.212c.837 0 1.358-.554 1.358-1.248-.015-.709-.52-1.248-1.342-1.248S2.4 3.226 2.4 3.934c0 .694.521 1.248 1.327 1.248zm4.908 8.212V9.359c0-.216.016-.432.08-.586.173-.431.568-.878 1.232-.878.869 0 1.216.662 1.216 1.634v3.865h2.401V9.25c0-2.22-1.184-3.252-2.764-3.252-1.274 0-1.845.7-2.165 1.193v.025h-.016l.016-.025V6.169h-2.4c.03.678 0 7.225 0 7.225z"/>
+                    </svg> linkedin</a>
+                    <a href="terms.html" class="float-end text-decoration-none">Terms &amp; Conditions</a>
                 </footer>
               </div>
             </div>
@@ -188,6 +227,18 @@
               <div id="toastBody" class="toast-body">
                 </div>
               <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+          </div>
+        </div>
+        <!-- Confirm toast (centered on screen) -->
+        <div class="toast-container position-fixed top-50 start-50 translate-middle p-3" style="z-index: 1100;">
+          <div class="toast" id="confirmToast" role="alert" aria-live="assertive" aria-atomic="true" style="min-width: 280px; background-color: #fff;">
+            <div class="toast-body">
+              <p id="confirmToastBody" class="mb-2">Are you sure?</p>
+              <div class="d-flex justify-content-end gap-2">
+                <button type="button" class="btn btn-danger btn-sm" id="toastTakeAction">Delete</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="toastCloseBtn">Cancel</button>
+              </div>
             </div>
           </div>
         </div>
