@@ -82,10 +82,23 @@
         return;
       }
       refreshing = true;
+      reloadWhenSafe(0);
+    });
+
+    // Never reload while a Google sign-in popup is open: the window waiting
+    // for the popup's answer would be replaced, the answer would arrive at a
+    // page that no longer listens, and the sign-in would fail with no error —
+    // which looks exactly like "the popup opens, closes, nothing happens".
+    function reloadWhenSafe(attempt) {
+      if (window.__gsAuthBusy && attempt < 24) {
+        log('Google sign-in in progress — deferring the reload');
+        setTimeout(() => reloadWhenSafe(attempt + 1), 5000);
+        return;
+      }
       // Give the app a chance to persist unsaved work before going away
       window.dispatchEvent(new Event('pwa:before-reload'));
       window.location.reload();
-    });
+    }
   });
 
   // Button click: tell the waiting worker to activate now

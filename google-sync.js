@@ -31,6 +31,12 @@ const GS_TIMES_KEY = 'google_sync_times';         // storageKey -> last edited/d
 const GS_BASELINE_KEY = 'google_sync_baseline';   // snapshot of the last successful upload
 const GS_PAYLOAD_VERSION = 2;                     // v2 = carries per-key edit times
 const GS_SILENT_RETRY_COOLDOWN = 60000;           // don't hammer Drive after a failed background renewal
+const GS_EVENTS_KEY = 'google_sync_events';       // last sync steps, shown as "Sync details"
+const GS_HANDOFF_KEY = 'google_sync_token_handoff'; // token parked by the consent popup window
+const GS_REDIRECT_KEY = 'google_sync_redirect';   // a full-page Google sign-in is in progress
+const GS_RESUME_KEY = 'google_sync_auth_resume';  // sync again after coming back from Google
+const GS_STATE_KEY = 'google_sync_state';         // state of the redirect above (CSRF guard)
+const GS_MAX_EVENTS = 10;                         // how many steps "Sync details" keeps
 
 let gsUser = null;
 let gsToken = null;
@@ -44,12 +50,44 @@ let gsSilentRetryAt = 0;          // cooldown after a failed background renewal
 let gsPreferConsent = false;      // a silent attempt already failed on this device
 let gsSyncInFlight = false;       // a sync is running (resume checks this)
 let gsAutoToastAt = 0;            // last time auto-sync explained why it paused
+let gsResumeAfterAuth = false;    // a full-page Google sign-in just delivered a token
 
 /* ----------------------------- small helpers ----------------------------- */
 
 function gsToast(message, type) {
     if (typeof showToast === 'function') showToast(message, type || 'success');
     else console.log('[GS]', message);
+}
+
+/* ----------------------------- diagnostics --------------------------------
+   Every token / sync step is appended here and rendered into the sidebar as
+   "Sync details". A phone can then be diagnosed from a screenshot — nobody
+   opens DevTools on a mobile device, and the sidebar error line alone has
+   never been enough to tell WHERE the chain broke. */
+function gsLogEvent(kind, detail) {
+    const text = new Date().toTimeString().slice(0, 8) + '  ' + kind + (detail ? ' — ' + detail : '');
+    console.log('[GS]', text);
+    let list = [];
+    try {
+        list = JSON.parse(localStorage.getItem(GS_EVENTS_KEY) || '[]');
+        if (!Array.isArray(list)) list = [];
+    } catch (e) { list = []; }
+    list.push(text);
+    while (list.length > GS_MAX_EVENTS) list.shift();
+    try { localStorage.setItem(GS_EVENTS_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+    gsRenderEvents(list);
+}
+
+function gsRenderEvents(list) {
+    const el = document.getElementById('gsEvents');
+    if (!el) return;
+    if (!Array.isArray(list)) {
+        try { list = JSON.parse(localStorage.getItem(GS_EVENTS_KEY) || '[]'); } catch (e) { list = []; }
+        if (!Array.isArray(list)) list = [];
+    }
+    el.textContent = list.join('\n');
+    const box = document.getElementById('gsDetails');
+    if (box) box.style.display = list.length ? '' : 'none';
 }
 
 function gsDecodeJwt(token) {
@@ -142,6 +180,7 @@ function gsMarkSynced() {
     localStorage.setItem(GS_LAST_SYNC_KEY, new Date().toISOString());
     gsSetError(null);
     gsRenderLastSync();
+    gsLogEvent('sync ok', 'Google Drive is up to date');
 }
 
 /* Persistent on-page status: every failure is shown in the sidebar so the
@@ -230,9 +269,15 @@ function gsDeliverToken(resp) {
             gsSilentRetryAt = 0;
             gsPreferConsent = false;      // silent renew works on this device again
             gsRefreshPermissionPulse();
+            gsLogEvent(done ? 'token ok' : 'token arrived after the app gave up',
+                        done ? null : 'kept it — sync continues');
+            // A late answer still counts: store it and carry on instead of
+            // leaving the app waiting for a request that will never return
+            if (!done && gsUser) scheduleSync();
         } else if (resp && resp.error && resp.error !== 'interaction_required') {
             // interaction_required is the normal "not granted yet" answer
             console.warn('[GS] no access token', resp.error);
+            gsLogEvent('token error', resp.error);
             if (interactive) {
                 gsSetError(resp.error === 'access_denied'
                     ? 'Google denied access — add your account under Cloud Console → OAuth consent screen → Test users'
@@ -244,6 +289,10 @@ function gsDeliverToken(resp) {
             // prompt='none' could not be satisfied: the Google session behind the
             // grant is gone, so auto-sync has to pause until the user clicks again
             gsSessionExpired();
+        } else {
+            // silent attempt refused while the user was waiting (phones do this
+            // a lot) — the consent popup comes next, so just record it
+            gsLogEvent('token request refused', (resp && resp.error) || 'empty response');
         }
     } catch (e) {
         console.error('[GS] handling the token response failed', e);
@@ -257,6 +306,7 @@ function gsDeliverToken(resp) {
 function gsSessionExpired() {
     gsSilentRetryAt = Date.now() + GS_SILENT_RETRY_COOLDOWN;
     gsSetError('Google session expired — click "Sync now" to resume auto-sync');
+    gsLogEvent('auto-renew paused', 'silent renew refused — needs one tap on Sync now');
 }
 
 function gsRequestToken(prompt, interactive) {
@@ -268,10 +318,40 @@ function gsRequestToken(prompt, interactive) {
     gsTokenRequest = new Promise(function(resolve) {
         if (!gsTokenClient) return resolve(null);
         let finished = false;
+        /* Hand-off path: if the consent popup lands on OUR page carrying
+           #access_token=..., GIS posts it back to this window — but on phones
+           that postMessage is sometimes lost and the popup just closes. That is
+           exactly "the Google window opens, closes, nothing happens". Read the
+           same token from localStorage / a direct message instead. */
+        let handoffPoll = null;
+        function acceptHandoff(raw) {
+            let d = null;
+            try { d = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { return; }
+            if (!d || !d.token || Date.now() - (d.ts || 0) > 600000) return;
+            if (gsTokenResolve !== settle) return;   // already answered another way
+            gsLogEvent('token via popup hand-off', 'the popup did answer after all');
+            gsDeliverToken({ access_token: d.token, expires_in: d.expires || 3600 });
+        }
+        function checkHandoff() {
+            let raw = null;
+            try { raw = localStorage.getItem(GS_HANDOFF_KEY); } catch (e) { return; }
+            if (!raw) return;
+            try { localStorage.removeItem(GS_HANDOFF_KEY); } catch (e) { /* ignore */ }
+            acceptHandoff(raw);
+        }
+        function onHandoffMessage(e) {
+            if (!e || e.origin !== location.origin || !e.data || !e.data.gsHandoff) return;
+            acceptHandoff(e.data.gsHandoff);
+        }
         function settle(v) {
             if (finished) return;
             finished = true;
             clearTimeout(timer);
+            if (handoffPoll) { clearInterval(handoffPoll); handoffPoll = null; }
+            if (interactive) {
+                try { window.removeEventListener('message', onHandoffMessage); } catch (e) { /* ignore */ }
+            }
+            window.__gsAuthBusy = false; // a service-worker update may reload us now
             resolve(v);
         }
         // Safety net: never leave the UI hanging if Google's response is lost
@@ -280,17 +360,28 @@ function gsRequestToken(prompt, interactive) {
         const timer = setTimeout(function() {
             if (gsTokenResolve === settle) gsTokenResolve = null;
             console.warn('[GS] Google did not answer the token request in time');
+            gsLogEvent('no answer from Google',
+                interactive ? 'the popup closed without a token' : 'silent renew timed out');
             if (interactive) gsSetError('Google did not respond — tap "Sync now" again');
             else gsSessionExpired();
             settle(null);
         }, 45000);
+        if (interactive) {
+            try { localStorage.removeItem(GS_HANDOFF_KEY); } catch (e) { /* ignore */ }
+            try { window.addEventListener('message', onHandoffMessage); } catch (e) { /* ignore */ }
+            handoffPoll = setInterval(checkHandoff, 300);
+        }
         try {
             gsTokenResolve = settle; // responses arrive at the GLOBAL callback (see gsDeliverToken)
+            window.__gsAuthBusy = true;
+            gsLogEvent('asking Google for a token',
+                'prompt=' + (prompt || 'default') + (interactive ? ', after a tap' : ', silent'));
             gsTokenClient.requestAccessToken({
                 prompt: prompt,
                 error_callback: function(err) {
                     if (gsTokenResolve === settle) gsTokenResolve = null;
                     console.warn('[GS] token request error', err);
+                    gsLogEvent('Google popup problem', (err && err.type) || 'unknown');
                     if (interactive) {
                         const t = err && err.type;
                         if (t === 'popup_failed_to_open') {
@@ -309,6 +400,7 @@ function gsRequestToken(prompt, interactive) {
         } catch (e) {
             if (gsTokenResolve === settle) gsTokenResolve = null;
             console.error('[GS] token request failed', e);
+            gsLogEvent('token request threw', e.message || String(e));
             if (interactive) gsSetError('Google sign-in problem: ' + (e.message || e));
             settle(null);
         }
@@ -341,11 +433,11 @@ async function gsEnsureToken(interactive) {
     }
     // First-ever grant: go STRAIGHT to consent — one popup, gesture intact.
     // (Trying a silent attempt first could spend the click's popup permission.)
-    if (!granted) return gsRequestToken('consent', true);
+    if (!granted) return (await gsRequestToken('consent', true)) || gsRedirectAuth();
     // A silent attempt already failed on this device (common on phones: the
     // Google session cookie is invisible to the hidden iframe), so don't burn
     // time on it again — open consent straight away.
-    if (gsPreferConsent) return gsRequestToken('consent', true);
+    if (gsPreferConsent) return (await gsRequestToken('consent', true)) || gsRedirectAuth();
     // Already granted before: renew silently, fall back to consent if Google
     // insists (session ended / grant withdrawn)
     const silent = await gsRequestToken('none', true);
@@ -355,7 +447,136 @@ async function gsEnsureToken(interactive) {
        until the next successful sign-in. That is exactly why phones stopped
        syncing after the first expired token while desktops kept working. */
     gsPreferConsent = true; // next click skips straight to consent
-    return gsRequestToken('consent', true);
+    return (await gsRequestToken('consent', true)) || gsRedirectAuth();
+}
+
+/* --------------- fallback when the popup cannot deliver a token -------------
+   The consent popup returns its answer through Google's own relay: a
+   postMessage sent from accounts.google.com to this window. On some phones
+   that relay does not survive, the popup closes, and the app is left with no
+   token and no error — which looks exactly like "Google window opens and
+   closes, nothing happens, sync stops". When the popup route yields nothing,
+   finish the approval in THIS window instead: Google redirects back to the
+   app with #access_token=... and gsConsumeFragment() picks it up. */
+function gsRedirectAuth() {
+    try {
+        if (sessionStorage.getItem(GS_REDIRECT_KEY) === '1') {
+            gsSetError('Google sign-in could not be completed — see "Sync details" in the sidebar.');
+            return null;
+        }
+        sessionStorage.setItem(GS_REDIRECT_KEY, '1');
+        sessionStorage.setItem(GS_RESUME_KEY, '1');
+    } catch (e) {
+        gsSetError('This browser blocked the sign-in (session storage unavailable).');
+        return null;
+    }
+    // Attempt 0 sends just the origin (what GIS itself uses); if Google rejects
+    // that redirect URI the app returns with no token, the next attempt adds
+    // the path — so both common registrations work without guessing.
+    let attempt = 0;
+    try { attempt = parseInt(sessionStorage.getItem('google_sync_redirect_attempt') || '0', 10) || 0; } catch (e) { /* ignore */ }
+    const redirectUri = attempt === 0 ? location.origin : location.origin + location.pathname;
+    const state = 'gs' + Date.now().toString(36);
+    try { sessionStorage.setItem(GS_STATE_KEY, state); } catch (e) { /* ignore */ }
+    const url = 'https://accounts.google.com/o/oauth2/v2/auth'
+        + '?client_id=' + encodeURIComponent(GS_CONFIG.clientId)
+        + '&redirect_uri=' + encodeURIComponent(redirectUri)
+        + '&response_type=token'
+        + '&scope=' + encodeURIComponent(GS_CONFIG.scope)
+        + '&include_granted_scopes=true'
+        + '&state=' + encodeURIComponent(state)
+        + (gsUser && gsUser.email ? '&login_hint=' + encodeURIComponent(gsUser.email) : '');
+    gsLogEvent('popup produced no token', 'continuing the sign-in in this window → ' + redirectUri);
+    location.assign(url);
+    return null; // the page is navigating away — nothing left to await
+}
+
+/* Pick up a token that arrived in OUR OWN url (full-page sign-in). Called as
+   soon as this file loads, before anything else inspects stored state. */
+function gsConsumeFragment() {
+    let hash = '';
+    try { hash = location.hash || ''; } catch (e) { return false; }
+    if (!hash || hash.indexOf('=') === -1) return false;
+    const params = new URLSearchParams(hash.substring(1));
+    const token = params.get('access_token');
+    const err = params.get('error');
+    if (!token && !err) return false;
+
+    // Only accept an answer to a sign-in this tab started
+    let initiated = null, expected = null;
+    try {
+        initiated = sessionStorage.getItem(GS_REDIRECT_KEY);
+        expected = sessionStorage.getItem(GS_STATE_KEY);
+    } catch (e) { /* ignore */ }
+    const state = params.get('state');
+    if (state && expected && state !== expected) {
+        gsLogEvent('ignoring a Google response meant for another request', state);
+        return false;
+    }
+    if (!token && initiated !== '1') return false;
+
+    // Drop it from the URL so a reload never replays an old answer
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* ignore */ }
+
+    if (token) {
+        const inPopup = !!(window.opener && window.opener !== window);
+        const expires = parseInt(params.get('expires_in') || '3600', 10);
+        if (inPopup) {
+            // This ran inside the consent popup: park the token where the window
+            // that opened us can find it — its own GIS listener may be the thing
+            // that failed, which is the whole reason we are here.
+            const handoff = { token: token, expires: expires, ts: Date.now() };
+            try { localStorage.setItem(GS_HANDOFF_KEY, JSON.stringify(handoff)); } catch (e) { /* ignore */ }
+            try { window.opener.postMessage({ gsHandoff: handoff }, location.origin); } catch (e) { /* ignore */ }
+            gsLogEvent('popup reached our page', 'token handed to the opener');
+        } else {
+            gsResumeAfterAuth = true; // the load handler will run the sync
+        }
+        gsDeliverToken({ access_token: token, expires_in: expires });
+        gsLogEvent('token from the full-page sign-in', 'redirect completed');
+        try {
+            // GS_RESUME_KEY stays set on purpose: the load handler reads it to
+            // finish the sync this sign-in was started for
+            sessionStorage.removeItem(GS_REDIRECT_KEY);
+            sessionStorage.removeItem(GS_STATE_KEY);
+            sessionStorage.removeItem('google_sync_redirect_attempt');
+        } catch (e) { /* ignore */ }
+        return true;
+    }
+
+    gsLogEvent('Google answered with an error', err);
+    gsSetError(err === 'access_denied'
+        ? 'Google denied access — add your account under Cloud Console → OAuth consent screen → Test users.'
+        : 'Google sign-in error: ' + err);
+    try {
+        sessionStorage.removeItem(GS_REDIRECT_KEY);
+        sessionStorage.removeItem(GS_RESUME_KEY);
+        sessionStorage.removeItem(GS_STATE_KEY);
+    } catch (e) { /* ignore */ }
+    return true;
+}
+
+/* Came back from Google WITHOUT a token: the redirect URI was refused
+   (Error 400 / redirect_uri_mismatch) or the user pressed Back. Record which
+   URI was tried so the next attempt uses the other form, and say exactly what
+   to add in Cloud Console if that is what Google complained about. */
+function gsHandleRedirectReturn() {
+    let started = null;
+    try { started = sessionStorage.getItem(GS_REDIRECT_KEY); } catch (e) { return; }
+    if (started !== '1') return;
+    if (location.hash && location.hash.indexOf('access_token=') !== -1) return; // consumed already
+    let attempt = 1;
+    try {
+        attempt = (parseInt(sessionStorage.getItem('google_sync_redirect_attempt') || '0', 10) || 0) + 1;
+        sessionStorage.setItem('google_sync_redirect_attempt', String(attempt));
+        sessionStorage.removeItem(GS_REDIRECT_KEY);
+        sessionStorage.removeItem(GS_RESUME_KEY);
+        sessionStorage.removeItem(GS_STATE_KEY);
+    } catch (e) { /* ignore */ }
+    const tried = attempt === 1 ? location.origin : location.origin + location.pathname;
+    gsLogEvent('sign-in returned without a token', 'redirect URI tried: ' + tried);
+    gsSetError('Google did not send a token back. If it showed "Error 400: redirect_uri_mismatch", add "'
+        + tried + '" to Authorized redirect URIs (Cloud Console → Credentials → your OAuth client) and tap "Sync now" again.');
 }
 
 /* Drop the current token so the next call renews it (used after a 401) */
@@ -874,6 +1095,7 @@ async function gsSyncToDrive(interactive, retried) {
     if (!gsUser) return false;
     const token = await gsEnsureToken(interactive);
     if (!token) {
+        gsLogEvent(interactive ? 'Sync now got no token' : 'auto-sync skipped', 'no Google token available');
         const granted = localStorage.getItem(GS_GRANTED_KEY) === '1';
         if (interactive) {
             // Don't overwrite a more specific error set during the token request
@@ -950,10 +1172,12 @@ async function gsSyncToDrive(interactive, retried) {
         // renew it silently and run the whole sync once more
         if (e && e.status === 401 && !retried) {
             console.warn('[GS] access token rejected by Drive — refreshing it and retrying');
+            gsLogEvent('token rejected by Drive', 'renewing it and retrying once');
             gsInvalidateToken();
             return await gsSyncToDrive(interactive, true);
         }
         console.error('[GS] sync failed:', e);
+        gsLogEvent('sync failed', (e && e.message) || String(e));
         gsSetError(e.message || String(e));
         if (interactive) gsToast('Google sync failed: ' + (e.message || e), 'danger');
         return false;
@@ -1053,6 +1277,7 @@ function gsResumeSync() {
     if (Date.now() < gsSilentRetryAt) return;                  // cooldown after a failure
     clearTimeout(gsSyncTimer);
     gsSyncTimer = null;
+    gsLogEvent('app came back to the front', 'Google token had expired — renewing');
     gsSyncToDrive(false);
 }
 
@@ -1070,11 +1295,17 @@ function gsWhenGisReady(callback, tries) {
     setTimeout(function() { gsWhenGisReady(callback, (tries || 0) + 1); }, 100);
 }
 
+/* A full-page Google sign-in returns to this URL with #access_token=... in
+   the fragment — take it before anything else looks at stored state */
+try { gsConsumeFragment(); } catch (e) { console.warn('[GS] fragment handling failed', e); }
+
 window.addEventListener('load', function() {
     gsUser = gsReadUser();
     if (gsUser) gsLoadToken();
     gsUpdateUserUi();
     gsRenderError();
+    gsRenderEvents();
+    gsHandleRedirectReturn();
 
     gsWhenGisReady(function() {
         try {
@@ -1123,6 +1354,21 @@ window.addEventListener('load', function() {
     }
     window.addEventListener('pageshow', gsResumeSync);
     window.addEventListener('focus', gsResumeSync);
+
+    // Returned from a full-page Google sign-in with a fresh token → carry on
+    // with the sync that could not be finished before the redirect
+    let wantsResume = gsResumeAfterAuth;
+    try { wantsResume = wantsResume || sessionStorage.getItem(GS_RESUME_KEY) === '1'; } catch (e) { /* ignore */ }
+    if (wantsResume) {
+        gsResumeAfterAuth = false;
+        try { sessionStorage.removeItem(GS_RESUME_KEY); } catch (e) { /* ignore */ }
+        if (gsUser && gsToken && Date.now() < gsTokenExpiresAt) {
+            gsLogEvent('resuming the sync that was waiting for the sign-in');
+            gsSyncToDrive(false).then(function(ok) {
+                if (ok) gsToast('Synced to Google Drive.', 'success');
+            });
+        }
+    }
 });
 
 /* --------------------- debug handle (console use) ----------------------- */
@@ -1144,6 +1390,10 @@ window.myNotepadGoogle = {
         };
     },
     sync: function() { return gsSyncToDrive(true); },
+    /* Last sync/token steps — what the sidebar "Sync details" shows */
+    events: function() {
+        try { return JSON.parse(localStorage.getItem(GS_EVENTS_KEY) || '[]'); } catch (e) { return []; }
+    },
     /* Force a token renewal — proves auto-sync can recover after expiry */
     refreshToken: function() {
         gsInvalidateToken();
