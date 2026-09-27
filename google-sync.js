@@ -41,6 +41,9 @@ let gsConsentHintShown = false;
 let gsTokenInteractive = false;   // is the token request in flight user-triggered?
 let gsTokenRequest = null;        // promise of that request (one at a time)
 let gsSilentRetryAt = 0;          // cooldown after a failed background renewal
+let gsPreferConsent = false;      // a silent attempt already failed on this device
+let gsSyncInFlight = false;       // a sync is running (resume checks this)
+let gsAutoToastAt = 0;            // last time auto-sync explained why it paused
 
 /* ----------------------------- small helpers ----------------------------- */
 
@@ -210,34 +213,43 @@ function gsHandleCredential(response) {
 let gsTokenResolve = null; // resolver of the token request currently in flight
 
 /* Global token-response callback: requestAccessToken() only delivers to this
-   one callback (a per-request "callback" is ignored by GIS) */
+   one callback (a per-request "callback" is ignored by GIS).
+   It must NEVER throw before resolving the request: a throw here left the
+   caller hanging forever with no token and no error (seen on phones, where
+   a Google popup closes without the response reaching us). */
 function gsDeliverToken(resp) {
     const interactive = gsTokenInteractive;
-    if (resp && resp.access_token) {
-        gsToken = resp.access_token;
-        gsTokenExpiresAt = Date.now() + Math.max(60, (resp.expires_in || 3600) - 60) * 1000;
-        gsSaveToken(gsToken, gsTokenExpiresAt);
-        localStorage.setItem(GS_GRANTED_KEY, '1');
-        gsSilentRetryAt = 0;
-        gsRefreshPermissionPulse();
-    } else if (resp && resp.error && resp.error !== 'interaction_required') {
-        // interaction_required is the normal "not granted yet" answer
-        console.warn('[GS] no access token', resp.error);
-        if (interactive) {
-            gsSetError(resp.error === 'access_denied'
-                ? 'Google denied access — add your account under Cloud Console → OAuth consent screen → Test users'
-                : 'Google token error: ' + resp.error);
-        } else {
-            gsSessionExpired();
-        }
-    } else if (resp && resp.error === 'interaction_required' && !interactive) {
-        // prompt='none' could not be satisfied: the Google session behind the
-        // grant is gone, so auto-sync has to pause until the user clicks again
-        gsSessionExpired();
-    }
     const done = gsTokenResolve;
     gsTokenResolve = null;
-    if (done) done(resp && resp.access_token ? gsToken : null);
+    try {
+        if (resp && resp.access_token) {
+            gsToken = resp.access_token;
+            gsTokenExpiresAt = Date.now() + Math.max(60, (resp.expires_in || 3600) - 60) * 1000;
+            gsSaveToken(gsToken, gsTokenExpiresAt);
+            localStorage.setItem(GS_GRANTED_KEY, '1');
+            gsSilentRetryAt = 0;
+            gsPreferConsent = false;      // silent renew works on this device again
+            gsRefreshPermissionPulse();
+        } else if (resp && resp.error && resp.error !== 'interaction_required') {
+            // interaction_required is the normal "not granted yet" answer
+            console.warn('[GS] no access token', resp.error);
+            if (interactive) {
+                gsSetError(resp.error === 'access_denied'
+                    ? 'Google denied access — add your account under Cloud Console → OAuth consent screen → Test users'
+                    : 'Google token error: ' + resp.error);
+            } else {
+                gsSessionExpired();
+            }
+        } else if (resp && resp.error === 'interaction_required' && !interactive) {
+            // prompt='none' could not be satisfied: the Google session behind the
+            // grant is gone, so auto-sync has to pause until the user clicks again
+            gsSessionExpired();
+        }
+    } catch (e) {
+        console.error('[GS] handling the token response failed', e);
+    } finally {
+        if (done) done(resp && resp.access_token ? gsToken : null);
+    }
 }
 
 /* A silent renewal can fail (Google session ended, grant withdrawn, timeout).
@@ -263,12 +275,15 @@ function gsRequestToken(prompt, interactive) {
             resolve(v);
         }
         // Safety net: never leave the UI hanging if Google's response is lost
+        // (short: on phones a popup can close without answering, and waiting
+        // three minutes with no feedback feels like "sync just stopped")
         const timer = setTimeout(function() {
             if (gsTokenResolve === settle) gsTokenResolve = null;
-            if (interactive) gsSetError('Google did not respond — click "Sync now" again');
+            console.warn('[GS] Google did not answer the token request in time');
+            if (interactive) gsSetError('Google did not respond — tap "Sync now" again');
             else gsSessionExpired();
             settle(null);
-        }, 180000);
+        }, 45000);
         try {
             gsTokenResolve = settle; // responses arrive at the GLOBAL callback (see gsDeliverToken)
             gsTokenClient.requestAccessToken({
@@ -307,6 +322,13 @@ function gsRequestToken(prompt, interactive) {
 async function gsEnsureToken(interactive) {
     if (gsToken && Date.now() < gsTokenExpiresAt) return gsToken;
 
+    // GIS never loaded (slow network / ad-blocker): without this check every
+    // token request resolved null with no message at all
+    if (!gsTokenClient) {
+        gsSetError('Google sign-in services did not load — check your connection or an ad-blocker, then reload the app.');
+        return null;
+    }
+
     const granted = localStorage.getItem(GS_GRANTED_KEY) === '1';
 
     // Auto-sync must NEVER open a popup (no user gesture = browser blocks it),
@@ -320,11 +342,19 @@ async function gsEnsureToken(interactive) {
     // First-ever grant: go STRAIGHT to consent — one popup, gesture intact.
     // (Trying a silent attempt first could spend the click's popup permission.)
     if (!granted) return gsRequestToken('consent', true);
+    // A silent attempt already failed on this device (common on phones: the
+    // Google session cookie is invisible to the hidden iframe), so don't burn
+    // time on it again — open consent straight away.
+    if (gsPreferConsent) return gsRequestToken('consent', true);
     // Already granted before: renew silently, fall back to consent if Google
     // insists (session ended / grant withdrawn)
     const silent = await gsRequestToken('none', true);
     if (silent) return silent;
-    localStorage.removeItem(GS_GRANTED_KEY); // consent is needed again next click
+    /* Keep GS_GRANTED_KEY. It used to be removed here, which made every later
+       auto-sync bail out at "if (!granted) return null" — silently, forever,
+       until the next successful sign-in. That is exactly why phones stopped
+       syncing after the first expired token while desktops kept working. */
+    gsPreferConsent = true; // next click skips straight to consent
     return gsRequestToken('consent', true);
 }
 
@@ -853,14 +883,23 @@ async function gsSyncToDrive(interactive, retried) {
                 }
             } catch (e) { /* ignore */ }
             gsToast('Google permission is required to sync.', 'danger');
-        } else if (!gsConsentHintShown) {
+        } else if (!granted && !gsConsentHintShown) {
             gsConsentHintShown = true;
-            gsToast(granted
-                ? 'Google session expired — click "Sync now" to resume auto-sync.'
-                : 'Google sync needs one-time permission — click "Sync now" in the sidebar.', 'info');
+            gsToast('Google sync needs one-time permission — tap "Sync now" in the sidebar.', 'info');
+        } else if (granted) {
+            /* Auto-sync must say WHY it stopped. The sidebar (where the error
+               lives) sits behind the ☰ drawer on phones, and the old hint was
+               skipped because signing in already marked it as shown — so a
+               phone just looked like it had silently stopped syncing. */
+            const now = Date.now();
+            if (now - gsAutoToastAt > 120000) {   // at most one nudge per 2 min
+                gsAutoToastAt = now;
+                gsToast('Auto-sync paused — open the menu (☰) and tap "Sync now" to reconnect Google Drive.', 'info');
+            }
         }
         return false;
     }
+    gsSyncInFlight = true;
     gsSetSyncing(true);
     try {
         const local = gsNormalizePayload(gsBuildPayload());
@@ -919,6 +958,7 @@ async function gsSyncToDrive(interactive, retried) {
         if (interactive) gsToast('Google sync failed: ' + (e.message || e), 'danger');
         return false;
     } finally {
+        gsSyncInFlight = false;
         gsSetSyncing(false);
     }
 }
@@ -1001,6 +1041,21 @@ function scheduleSync() {
     }, 8000);
 }
 
+/* Mobile browsers freeze timers while the app is backgrounded, so the 8s
+   debounce above often never fires — and the one-hour access token expires
+   while the phone is in a pocket. Renew (silently) and sync as soon as the
+   app is visible again, which is what makes auto-sync recover on phones. */
+function gsResumeSync() {
+    if (!gsUser || gsSyncInFlight || gsTokenRequest) return;   // busy
+    if (document.visibilityState === 'hidden') return;
+    if (localStorage.getItem(GS_GRANTED_KEY) !== '1') return;  // never connected
+    if (gsToken && Date.now() < gsTokenExpiresAt) return;      // token still valid
+    if (Date.now() < gsSilentRetryAt) return;                  // cooldown after a failure
+    clearTimeout(gsSyncTimer);
+    gsSyncTimer = null;
+    gsSyncToDrive(false);
+}
+
 /* --------------------------------- init --------------------------------- */
 
 function gsWhenGisReady(callback, tries) {
@@ -1058,6 +1113,16 @@ window.addEventListener('load', function() {
 
     // Keep "Last synced: x ago" fresh
     setInterval(function() { if (gsUser) gsRenderLastSync(); }, 60000);
+
+    // Coming back to the app (tab focus, returning from the background on a
+    // phone) is the moment to renew an expired token and catch up on sync
+    if (document.addEventListener) {
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) gsResumeSync();
+        });
+    }
+    window.addEventListener('pageshow', gsResumeSync);
+    window.addEventListener('focus', gsResumeSync);
 });
 
 /* --------------------- debug handle (console use) ----------------------- */
