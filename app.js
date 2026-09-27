@@ -124,10 +124,17 @@ $(document).ready(function() {
         });
     });
 
-    // Phone mode: open the notes drawer on start for easy note selection
-    if (window.matchMedia('(max-width: 767.98px)').matches) {
+    // Home screen shortcut: open the sidebar on phones and start a new note
+    $('#homeNewNote').on('click', function() {
         openSidebar();
-    }
+        $('#newNote').trigger('click');
+        $('#newNoteTitle').trigger('focus');
+    });
+
+    // Keep the home-screen hint in sync when crossing the phone/desktop breakpoint
+    const phoneMq = window.matchMedia('(max-width: 767.98px)');
+    if (phoneMq.addEventListener) phoneMq.addEventListener('change', updateHomeScreen);
+    else if (phoneMq.addListener) phoneMq.addListener(updateHomeScreen);
 });
 
 function updateIndex(type) {
@@ -204,6 +211,141 @@ function showIndex() {
                 </div>`;
     })
     $("#indexListing").html(html);
+    updateHomeScreen();
+}
+
+/* Home screen vs. editor: the feature overview is shown whenever no file is
+   open, so the empty title/textarea is never seen on the home screen */
+function updateHomeScreen() {
+    const home = !activePage;
+    $('#homeScreen').css('display', home ? 'flex' : 'none');
+    $('#editorInputs').css('display', home ? 'none' : 'flex');
+
+    const hint = document.getElementById('homeHint');
+    if (hint) {
+        const phone = window.matchMedia('(max-width: 767.98px)').matches;
+        if (home && activeNote) {
+            const name = activeNote.replaceAll('-', ' ');
+            hint.textContent = phone
+                ? 'Tap ☰ and pick a file inside "' + name + '",\nor tap + file to add one.'
+                : 'Select a file inside "' + name + '",\nor add a new one.';
+        } else {
+            hint.textContent = phone
+                ? 'Tap ☰ to see your notes,\nor start a new note.'
+                : 'Select a file to open it,\nor start a new note.';
+        }
+    }
+
+    renderRecents();
+}
+
+/* ---------------------- recent files (home screen) ----------------------
+   The 5 files opened or saved most recently, newest first. Stored locally
+   as [{n: noteKey, p: pageName, t: savedAt}]; entries whose note/file no
+   longer exists are dropped when the list is rendered. */
+const RECENT_FILES_KEY = 'recent_files';
+const RECENT_FILES_MAX = 5;
+
+function getRecents() {
+    try {
+        const list = JSON.parse(localStorage.getItem(RECENT_FILES_KEY) || '[]');
+        return Array.isArray(list) ? list : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function recordRecent(noteKey, pageName) {
+    if (!noteKey || !pageName) return;
+    const list = getRecents().filter(function(r) {
+        if (!r || !notes[r.n] || notes[r.n].indexOf(r.p) < 0) return false; // drop deleted files
+        return !(r.n === noteKey && r.p === pageName);
+    });
+    list.unshift({ n: noteKey, p: pageName, t: Date.now() });
+    try {
+        localStorage.setItem(RECENT_FILES_KEY, JSON.stringify(list.slice(0, RECENT_FILES_MAX)));
+    } catch (e) { /* storage full/blocked — recents are optional */ }
+}
+
+/* Document glyph for the recent rows (same icon the sidebar uses) */
+const FILE_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" fill="currentColor" class="bi bi-file-earmark-text" viewBox="0 0 16 16">'
+    + '<path d="M5.5 7a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1zM5 9.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m0 2a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 0 1h-2a.5.5 0 0 1-.5-.5"/>'
+    + '<path d="M9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.5zm0 1v2A1.5 1.5 0 0 0 11 4.5h2V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z"/>'
+    + '</svg>';
+
+/* "just now" / "6h ago" / "2d ago" / "12 Sep" label on the right of a row */
+function relTime(ts) {
+    if (!ts) return '';
+    const secs = Math.floor((Date.now() - ts) / 1000);
+    if (secs < 60) return 'just now';
+    if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+    if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
+    const days = Math.floor(secs / 86400);
+    if (days < 7) return days + 'd ago';
+    return new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+function renderRecents() {
+    const wrap = document.getElementById('recentWrap');
+    const box = document.getElementById('recentFiles');
+    if (!wrap || !box) return;
+
+    const phone = window.matchMedia('(max-width: 767.98px)').matches;
+    const items = getRecents().filter(function(r) {
+        return r && notes[r.n] && notes[r.n].indexOf(r.p) >= 0;
+    }).slice(0, RECENT_FILES_MAX);
+
+    box.innerHTML = '';
+    items.forEach(function(r) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'recent-row';
+        row.title = 'Open "' + r.p.replaceAll('-', ' ') + '"';
+
+        const icon = document.createElement('span');
+        icon.className = 'rr-icon';
+        icon.innerHTML = FILE_ICON_SVG; // fixed markup, contains no user data
+
+        const body = document.createElement('span');
+        body.className = 'rr-body';
+        const file = document.createElement('span');
+        file.className = 'rr-name';
+        file.textContent = r.p.replaceAll('-', ' ');
+        const note = document.createElement('span');
+        note.className = 'rr-note';
+        note.textContent = 'in ' + r.n.replaceAll('-', ' ');
+        body.appendChild(file);
+        body.appendChild(note);
+
+        const time = document.createElement('span');
+        time.className = 'rr-time';
+        time.textContent = relTime(r.t);
+
+        row.appendChild(icon);
+        row.appendChild(body);
+        row.appendChild(time);
+        row.addEventListener('click', function() { openRecent(r.n, r.p); });
+        box.appendChild(row);
+    });
+
+    // Keep the section when it has rows, or on phones (it holds the "New note" row)
+    wrap.style.display = (items.length || phone) ? '' : 'none';
+}
+
+/* Open a file from the home-screen recent list: select its note first so the
+   sidebar state (highlights, page list) stays consistent, then open the file */
+function openRecent(noteKey, pageName) {
+    if (!notes[noteKey]) {
+        showToast('That note no longer exists.', 'danger');
+        return;
+    }
+    const idx = notes[noteKey].indexOf(pageName);
+    if (idx < 0) {
+        showToast('That file no longer exists.', 'danger');
+        return;
+    }
+    selectNotee(noteKey);
+    selectFile(noteKey, idx);
 }
 
 /* Home screen: deselect the note and the file, collapse the page lists and
@@ -228,6 +370,7 @@ function selectNotee(ttl) {
     $('#fileText').val('').prop('disabled', true);
     $("#saveNote").text('');
     $(`#${ttl}`).show();
+    updateHomeScreen(); // no file open yet → show the feature overview
 }
 
 function showNewFileInput(ttl) {
@@ -258,6 +401,8 @@ function selectFile(ttl, pgs) {
     $(`#${ttl}-${pgs}`).addClass('active-file');
     let file = getFileFromStorage(ttl, activePage);
     viewPage(file);
+    recordRecent(ttl, activePage);   // keeps the home-screen "Recent files" list fresh
+    updateHomeScreen(); // file open → hide the feature overview
     closeSidebarOnMobile();
 }
 
@@ -269,6 +414,7 @@ $(`#saveNote`).on('click', function() {
         let file = {'note_name': activeNote, 'page_name': activePage, 'text_note': text};
         const ok = saveFileToStorage(activeNote, activePage, text);
         if (ok) {
+            recordRecent(activeNote, activePage); // a save counts as a recent hit too
             let msg = 'File save succesfuly.';
             showToast(msg, 'success');
             viewPage(file);
