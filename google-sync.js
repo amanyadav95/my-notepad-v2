@@ -7,6 +7,9 @@
      backup, downloads it and MERGES it with local data (newest edit wins)
      before writing anything, so a device never clobbers changes that were
      made elsewhere
+   - The Drive access token expires every hour, so it is renewed silently
+     (prompt='none', no popup) whenever it is needed, which keeps auto-sync
+     running instead of stopping when the session expires
    ========================================================================== */
 
 const GS_CONFIG = {
@@ -27,6 +30,7 @@ const GS_ERROR_KEY = 'google_sync_last_error';
 const GS_TIMES_KEY = 'google_sync_times';         // storageKey -> last edited/deleted time
 const GS_BASELINE_KEY = 'google_sync_baseline';   // snapshot of the last successful upload
 const GS_PAYLOAD_VERSION = 2;                     // v2 = carries per-key edit times
+const GS_SILENT_RETRY_COOLDOWN = 60000;           // don't hammer Drive after a failed background renewal
 
 let gsUser = null;
 let gsToken = null;
@@ -34,6 +38,9 @@ let gsTokenExpiresAt = 0;
 let gsTokenClient = null;
 let gsSyncTimer = null;
 let gsConsentHintShown = false;
+let gsTokenInteractive = false;   // is the token request in flight user-triggered?
+let gsTokenRequest = null;        // promise of that request (one at a time)
+let gsSilentRetryAt = 0;          // cooldown after a failed background renewal
 
 /* ----------------------------- small helpers ----------------------------- */
 
@@ -79,6 +86,7 @@ function gsLoadToken() {
             gsTokenExpiresAt = data.expiresAt;
             return gsToken;
         }
+        gsClearToken(); // expired → forget it so a renewal is attempted
     } catch (e) { /* ignore */ }
     return null;
 }
@@ -204,26 +212,48 @@ let gsTokenResolve = null; // resolver of the token request currently in flight
 /* Global token-response callback: requestAccessToken() only delivers to this
    one callback (a per-request "callback" is ignored by GIS) */
 function gsDeliverToken(resp) {
+    const interactive = gsTokenInteractive;
     if (resp && resp.access_token) {
         gsToken = resp.access_token;
         gsTokenExpiresAt = Date.now() + Math.max(60, (resp.expires_in || 3600) - 60) * 1000;
         gsSaveToken(gsToken, gsTokenExpiresAt);
         localStorage.setItem(GS_GRANTED_KEY, '1');
+        gsSilentRetryAt = 0;
         gsRefreshPermissionPulse();
     } else if (resp && resp.error && resp.error !== 'interaction_required') {
         // interaction_required is the normal "not granted yet" answer
         console.warn('[GS] no access token', resp.error);
-        gsSetError(resp.error === 'access_denied'
-            ? 'Google denied access — add your account under Cloud Console → OAuth consent screen → Test users'
-            : 'Google token error: ' + resp.error);
+        if (interactive) {
+            gsSetError(resp.error === 'access_denied'
+                ? 'Google denied access — add your account under Cloud Console → OAuth consent screen → Test users'
+                : 'Google token error: ' + resp.error);
+        } else {
+            gsSessionExpired();
+        }
+    } else if (resp && resp.error === 'interaction_required' && !interactive) {
+        // prompt='none' could not be satisfied: the Google session behind the
+        // grant is gone, so auto-sync has to pause until the user clicks again
+        gsSessionExpired();
     }
     const done = gsTokenResolve;
     gsTokenResolve = null;
     if (done) done(resp && resp.access_token ? gsToken : null);
 }
 
-function gsRequestToken(prompt) {
-    return new Promise(function(resolve) {
+/* A silent renewal can fail (Google session ended, grant withdrawn, timeout).
+   Auto-sync cannot open a popup, so say so instead of stopping silently */
+function gsSessionExpired() {
+    gsSilentRetryAt = Date.now() + GS_SILENT_RETRY_COOLDOWN;
+    gsSetError('Google session expired — click "Sync now" to resume auto-sync');
+}
+
+function gsRequestToken(prompt, interactive) {
+    // GIS delivers every response to ONE global callback, so two requests must
+    // never run at once — a background renewal and a "Sync now" click share it
+    if (gsTokenRequest) return gsTokenRequest;
+
+    gsTokenInteractive = !!interactive;
+    gsTokenRequest = new Promise(function(resolve) {
         if (!gsTokenClient) return resolve(null);
         let finished = false;
         function settle(v) {
@@ -235,7 +265,8 @@ function gsRequestToken(prompt) {
         // Safety net: never leave the UI hanging if Google's response is lost
         const timer = setTimeout(function() {
             if (gsTokenResolve === settle) gsTokenResolve = null;
-            gsSetError('Google did not respond — click "Sync now" again');
+            if (interactive) gsSetError('Google did not respond — click "Sync now" again');
+            else gsSessionExpired();
             settle(null);
         }, 180000);
         try {
@@ -244,14 +275,18 @@ function gsRequestToken(prompt) {
                 prompt: prompt,
                 error_callback: function(err) {
                     if (gsTokenResolve === settle) gsTokenResolve = null;
-                    console.error('[GS] token request error', err);
-                    const t = err && err.type;
-                    if (t === 'popup_failed_to_open') {
-                        gsSetError('Google popup was blocked — allow popups for this site, then click "Sync now" again');
-                    } else if (t === 'popup_closed') {
-                        gsSetError('Google popup was closed before finishing — click "Sync now" again');
+                    console.warn('[GS] token request error', err);
+                    if (interactive) {
+                        const t = err && err.type;
+                        if (t === 'popup_failed_to_open') {
+                            gsSetError('Google popup was blocked — allow popups for this site, then click "Sync now" again');
+                        } else if (t === 'popup_closed') {
+                            gsSetError('Google popup was closed before finishing — click "Sync now" again');
+                        } else {
+                            gsSetError('Google sign-in problem' + (t ? ': ' + t : ''));
+                        }
                     } else {
-                        gsSetError('Google sign-in problem' + (t ? ': ' + t : ''));
+                        gsSessionExpired(); // background renewal: no popup wording
                     }
                     settle(null);
                 }
@@ -259,32 +294,53 @@ function gsRequestToken(prompt) {
         } catch (e) {
             if (gsTokenResolve === settle) gsTokenResolve = null;
             console.error('[GS] token request failed', e);
+            if (interactive) gsSetError('Google sign-in problem: ' + (e.message || e));
             settle(null);
         }
+    }).then(function(v) {
+        gsTokenRequest = null;
+        return v;
     });
+    return gsTokenRequest;
 }
 
 async function gsEnsureToken(interactive) {
     if (gsToken && Date.now() < gsTokenExpiresAt) return gsToken;
+
+    const granted = localStorage.getItem(GS_GRANTED_KEY) === '1';
+
     // Auto-sync must NEVER open a popup (no user gesture = browser blocks it),
-    // so non-interactive requests only use a stored token
-    if (!interactive) return gsLoadToken();
+    // so it only renews silently with prompt='none'. This is what keeps
+    // auto-sync running after the one-hour access token expires.
+    if (!interactive) {
+        if (!granted) return null;                     // Drive never authorised yet
+        if (Date.now() < gsSilentRetryAt) return null; // cooldown after a failed renewal
+        return gsRequestToken('none', false);
+    }
     // First-ever grant: go STRAIGHT to consent — one popup, gesture intact.
     // (Trying a silent attempt first could spend the click's popup permission.)
-    if (localStorage.getItem(GS_GRANTED_KEY) !== '1') {
-        return gsRequestToken('consent');
-    }
-    // Already granted before: try silent, fall back to consent if that fails
-    const silent = await gsRequestToken('none');
+    if (!granted) return gsRequestToken('consent', true);
+    // Already granted before: renew silently, fall back to consent if Google
+    // insists (session ended / grant withdrawn)
+    const silent = await gsRequestToken('none', true);
     if (silent) return silent;
     localStorage.removeItem(GS_GRANTED_KEY); // consent is needed again next click
-    return gsRequestToken('consent');
+    return gsRequestToken('consent', true);
+}
+
+/* Drop the current token so the next call renews it (used after a 401) */
+function gsInvalidateToken() {
+    gsToken = null;
+    gsTokenExpiresAt = 0;
+    gsSilentRetryAt = 0;
+    gsClearToken();
 }
 
 function gsSignOut() {
     const token = gsToken;
     gsToken = null;
     gsTokenExpiresAt = 0;
+    gsSilentRetryAt = 0;
     localStorage.removeItem(GS_USER_KEY);
     localStorage.removeItem(GS_GRANTED_KEY); // token was revoked → consent needed again
     try { localStorage.removeItem(GS_BASELINE_KEY); } catch (e) { /* ignore */ } // no cross-account merges
@@ -311,8 +367,10 @@ function gsAuthHeaders(token) {
 function gsApiError(what, status) {
     let hint = '';
     if (status === 403) hint = ' — the Google Drive API may be disabled: enable it in Cloud Console → APIs & Services → Library → Google Drive API';
-    else if (status === 401) hint = ' — session expired, click "Sync now" again';
-    throw new Error(what + ' (' + status + ')' + hint);
+    else if (status === 401) hint = ' — access token expired';
+    const err = new Error(what + ' (' + status + ')' + hint);
+    err.status = status; // lets the sync retry once with a fresh token
+    throw err;
 }
 
 async function gsFindBackup(token) {
@@ -782,10 +840,11 @@ function gsRefreshAfterMerge(indexChanged, filesChanged) {
 
 /* --------------------------- sync / restore ----------------------------- */
 
-async function gsSyncToDrive(interactive) {
+async function gsSyncToDrive(interactive, retried) {
     if (!gsUser) return false;
     const token = await gsEnsureToken(interactive);
     if (!token) {
+        const granted = localStorage.getItem(GS_GRANTED_KEY) === '1';
         if (interactive) {
             // Don't overwrite a more specific error set during the token request
             try {
@@ -796,7 +855,9 @@ async function gsSyncToDrive(interactive) {
             gsToast('Google permission is required to sync.', 'danger');
         } else if (!gsConsentHintShown) {
             gsConsentHintShown = true;
-            gsToast('Google sync needs one-time permission — click "Sync now" in the sidebar.', 'info');
+            gsToast(granted
+                ? 'Google session expired — click "Sync now" to resume auto-sync.'
+                : 'Google sync needs one-time permission — click "Sync now" in the sidebar.', 'info');
         }
         return false;
     }
@@ -812,7 +873,9 @@ async function gsSyncToDrive(interactive) {
                 remoteRaw = await gsDownload(token, fileId);
             } catch (e) {
                 // Never overwrite a backup that could not be read
-                throw new Error('Could not read the existing Google Drive backup, so nothing was overwritten — ' + (e.message || e));
+                const err = new Error('Could not read the existing Google Drive backup, so nothing was overwritten — ' + (e.message || e));
+                err.status = e && e.status; // keep 401 so the sync can renew + retry
+                throw err;
             }
             if (!gsIsValidPayload(remoteRaw)) {
                 throw new Error('The file in Google Drive is not a my-notepad backup — nothing was overwritten. Rename or delete it in Drive, then sync again.');
@@ -844,6 +907,13 @@ async function gsSyncToDrive(interactive) {
         if (interactive) gsToast('Synced to Google Drive.', 'success');
         return true;
     } catch (e) {
+        // Drive rejected the token (expired / revoked despite our own clock):
+        // renew it silently and run the whole sync once more
+        if (e && e.status === 401 && !retried) {
+            console.warn('[GS] access token rejected by Drive — refreshing it and retrying');
+            gsInvalidateToken();
+            return await gsSyncToDrive(interactive, true);
+        }
         console.error('[GS] sync failed:', e);
         gsSetError(e.message || String(e));
         if (interactive) gsToast('Google sync failed: ' + (e.message || e), 'danger');
@@ -1003,10 +1073,20 @@ window.myNotepadGoogle = {
             lastSync: localStorage.getItem(GS_LAST_SYNC_KEY),
             hasBaseline: !!gsLoadBaseline(),
             baselineAt: (gsLoadBaseline() || {}).savedAt || null,
-            trackedTimes: Object.keys(gsReadTimes()).length
+            trackedTimes: Object.keys(gsReadTimes()).length,
+            silentRenewPausedForSec: Math.max(0, Math.round((gsSilentRetryAt - Date.now()) / 1000)),
+            lastError: localStorage.getItem(GS_ERROR_KEY) || null
         };
     },
     sync: function() { return gsSyncToDrive(true); },
+    /* Force a token renewal — proves auto-sync can recover after expiry */
+    refreshToken: function() {
+        gsInvalidateToken();
+        return gsEnsureToken(true).then(function(t) {
+            if (!t) return 'renewal failed — check myNotepadGoogle.state().lastError';
+            return 'token renewed, expires in ' + Math.max(0, Math.round((gsTokenExpiresAt - Date.now()) / 1000)) + 's';
+        });
+    },
     restore: function() { return gsRestoreFromGoogle(); },
     signOut: function() { gsSignOut(); },
     /* Dry-run of the merge: downloads the Drive backup and reports what a
