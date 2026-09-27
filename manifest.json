@@ -1,6 +1,10 @@
 {
   "short_name": "NotePad",
   "name": "my-notepad",
+  "description": "Free online notepad that works offline and backs up automatically to your Google Drive.",
+  "id": "./",
+  "scope": "./",
+  "lang": "en",
   "icons": [
     {
       "src": "./icon128.png",

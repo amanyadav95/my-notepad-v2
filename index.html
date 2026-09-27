@@ -3,11 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>my-notepad</title>
+
+    <!-- ============ search results ============ -->
+    <title>My-NoTeS — Free Online Notepad with Google Drive Backup</title>
+    <meta name="description" content="Write notes in your browser with no sign-up. My-NoTeS works offline, installs as an app on your phone, and backs up automatically to your Google Drive.">
+    <meta name="keywords" content="online notepad, free online notepad, web notepad, notepad online, write notes online, notes app, google drive backup, offline notepad, pwa notepad, my notes, my-notepad">
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+    <meta name="author" content="amanyadav95">
+    <link rel="canonical" href="https://amanyadav95.github.io/my-notepad-v2/">
+    <meta name="theme-color" content="#007bff">
+    <meta name="application-name" content="My-NoTeS">
+    <meta name="format-detection" content="telephone=no">
+
+    <!-- ============ link preview when the app is shared ============ -->
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="My-NoTeS">
+    <meta property="og:locale" content="en_US">
+    <meta property="og:title" content="My-NoTeS — Free Online Notepad with Google Drive Backup">
+    <meta property="og:description" content="Write notes in your browser with no sign-up. Works offline, installs as an app, and backs up automatically to your Google Drive.">
+    <meta property="og:url" content="https://amanyadav95.github.io/my-notepad-v2/">
+    <meta property="og:image" content="https://amanyadav95.github.io/my-notepad-v2/icon512.png">
+    <meta property="og:image:width" content="512">
+    <meta property="og:image:height" content="512">
+    <meta property="og:image:alt" content="My-NoTeS app icon">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="My-NoTeS — Free Online Notepad with Google Drive Backup">
+    <meta name="twitter:description" content="Write notes in your browser with no sign-up. Works offline, installs as an app, and backs up automatically to your Google Drive.">
+    <meta name="twitter:image" content="https://amanyadav95.github.io/my-notepad-v2/icon512.png">
+    <meta name="twitter:image:alt" content="My-NoTeS app icon">
+
+    <!-- ============ install / home-screen behaviour ============ -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="My-NoTeS">
+    <link rel="apple-touch-icon" href="icon192.png">
     <link rel="icon" type="image/svg" href="favicon.svg">
     <link rel="stylesheet" href="bootstrap.min.css">
     <link rel="manifest" href="manifest.json">
-</head>
+
+    <!-- ============ machine-readable summary (Google rich results) ============ -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebSite",
+          "name": "My-NoTeS",
+          "alternateName": "my-notepad",
+          "url": "https://amanyadav95.github.io/my-notepad-v2/",
+          "inLanguage": "en"
+        },
+        {
+          "@type": "WebApplication",
+          "name": "My-NoTeS",
+          "alternateName": "my-notepad",
+          "url": "https://amanyadav95.github.io/my-notepad-v2/",
+          "image": "https://amanyadav95.github.io/my-notepad-v2/icon512.png",
+          "applicationCategory": "ProductivityApplication",
+          "operatingSystem": "Any (web browser)",
+          "browserRequirements": "Requires JavaScript",
+          "inLanguage": "en",
+          "description": "A free online notepad that works offline and backs up automatically to your Google Drive.",
+          "featureList": "Write and organise notes, works offline, Google Drive two-way sync, installable app",
+          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+        }
+      ]
+    }
+    </script>
 <style>
     .side-nev {
         min-height: 665px !important;
@@ -326,6 +389,7 @@
         .feature-cell:last-child { border-bottom: 0; }
     }
 </style>
+</head>
 <body>
     <div class="app-wrap">
         <!-- Mobile top bar: only visible below md breakpoint -->
