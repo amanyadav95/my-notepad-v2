@@ -79,15 +79,17 @@ function gsLogEvent(kind, detail) {
 }
 
 function gsRenderEvents(list) {
-    const el = document.getElementById('gsEvents');
-    if (!el) return;
-    if (!Array.isArray(list)) {
-        try { list = JSON.parse(localStorage.getItem(GS_EVENTS_KEY) || '[]'); } catch (e) { list = []; }
-        if (!Array.isArray(list)) list = [];
-    }
-    el.textContent = list.join('\n');
-    const box = document.getElementById('gsDetails');
-    if (box) box.style.display = list.length ? '' : 'none';
+    try {
+        const el = document.getElementById('gsEvents');
+        if (!el) return;
+        if (!Array.isArray(list)) {
+            try { list = JSON.parse(localStorage.getItem(GS_EVENTS_KEY) || '[]'); } catch (e) { list = []; }
+            if (!Array.isArray(list)) list = [];
+        }
+        el.textContent = list.join('\n');
+        const box = document.getElementById('gsDetails');
+        if (box) box.style.display = list.length ? '' : 'none';
+    } catch (e) { /* never let a status update break the token flow */ }
 }
 
 function gsDecodeJwt(token) {
@@ -296,6 +298,7 @@ function gsDeliverToken(resp) {
         }
     } catch (e) {
         console.error('[GS] handling the token response failed', e);
+        try { gsLogEvent('token response handling threw', e.message || String(e)); } catch (ignore) { /* ignore */ }
     } finally {
         if (done) done(resp && resp.access_token ? gsToken : null);
     }
@@ -305,8 +308,8 @@ function gsDeliverToken(resp) {
    Auto-sync cannot open a popup, so say so instead of stopping silently */
 function gsSessionExpired() {
     gsSilentRetryAt = Date.now() + GS_SILENT_RETRY_COOLDOWN;
-    gsSetError('Google session expired — click "Sync now" to resume auto-sync');
     gsLogEvent('auto-renew paused', 'silent renew refused — needs one tap on Sync now');
+    gsSetError('Google session expired — click "Sync now" to resume auto-sync');
 }
 
 function gsRequestToken(prompt, interactive) {
@@ -352,11 +355,21 @@ function gsRequestToken(prompt, interactive) {
                 try { window.removeEventListener('message', onHandoffMessage); } catch (e) { /* ignore */ }
             }
             window.__gsAuthBusy = false; // a service-worker update may reload us now
+            // Always leave a terminal marker. Without it a request that dies
+            // with the page (or gets swallowed by Google) is indistinguishable
+            // from one that is still running, which is how "sync just stopped"
+            // ended up with nothing to show for it.
+            gsLogEvent('token request finished', v ? 'token received' : 'no token');
             resolve(v);
         }
         // Safety net: never leave the UI hanging if Google's response is lost
         // (short: on phones a popup can close without answering, and waiting
-        // three minutes with no feedback feels like "sync just stopped")
+        // three minutes with no feedback feels like "sync just stopped").
+        // A silent renewal uses a hidden iframe — it answers in a couple of
+        // seconds or not at all, so it gets a much shorter leash: otherwise
+        // the phone backgrounds/reloads the page first and the failure is
+        // never recorded, leaving auto-sync to retry forever with no message.
+        const timeoutMs = interactive ? 45000 : 10000;
         const timer = setTimeout(function() {
             if (gsTokenResolve === settle) gsTokenResolve = null;
             console.warn('[GS] Google did not answer the token request in time');
@@ -365,7 +378,7 @@ function gsRequestToken(prompt, interactive) {
             if (interactive) gsSetError('Google did not respond — tap "Sync now" again');
             else gsSessionExpired();
             settle(null);
-        }, 45000);
+        }, timeoutMs);
         if (interactive) {
             try { localStorage.removeItem(GS_HANDOFF_KEY); } catch (e) { /* ignore */ }
             try { window.addEventListener('message', onHandoffMessage); } catch (e) { /* ignore */ }
@@ -1294,6 +1307,15 @@ function gsWhenGisReady(callback, tries) {
     }
     setTimeout(function() { gsWhenGisReady(callback, (tries || 0) + 1); }, 100);
 }
+
+/* One marker per page load. If it appears between "asking Google for a token"
+   and the next attempt, the phone reloaded/killed the page while a request
+   was in flight — that request dies with the page and never records an
+   outcome, which is what a missing terminal line means */
+try {
+    gsLogEvent('page loaded', (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+        ? 'installed app (full screen)' : 'browser tab');
+} catch (e) { /* ignore */ }
 
 /* A full-page Google sign-in returns to this URL with #access_token=... in
    the fragment — take it before anything else looks at stored state */
