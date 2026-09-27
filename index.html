@@ -102,6 +102,16 @@
             font-size: 1rem; /* match the mobile top bar branding size */
         }
     }
+    /* "My-NoTeS" headings (mobile top bar + sidebar) double as the Home button */
+    .home-title {
+        cursor: pointer;
+        user-select: none;
+        margin-bottom: 0;
+    }
+    .home-title:focus-visible {
+        outline: 2px solid #0d6efd;
+        outline-offset: 2px;
+    }
     .form-control:focus{
         box-shadow: none;
     }
@@ -160,7 +170,7 @@
                    <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5"/>
                 </svg>
             </button>
-            <strong>My-NoTeS</strong>
+            <h3 class="text-light-emphasis home-title" role="button" tabindex="0" title="" aria-label="My-NoTeS home">My-NoTeS</h3>
         </div>
         <!-- Dark backdrop shown behind the sidebar on mobile -->
         <div id="sidebarOverlay" class="sidebar-overlay" onclick="closeSidebar()"></div>
@@ -169,7 +179,7 @@
             <div class="card side-nev">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center">
-                        <h3 class="text-light-emphasis mb-0">My-NoTeS</h3>
+                        <h3 class="text-light-emphasis mb-0 home-title" role="button" tabindex="0" title="" aria-label="My-NoTeS home">My-NoTeS</h3>
                         <button type="button" class="btn btn-sm btn-outline-secondary d-md-none close-sidebar-btn" onclick="closeSidebar()" aria-label="Close menu">&times;</button>
                     </div>
                     <button id="newNote" type="button" class="btn btn-outline-secondary btn-sm w-100 mb-2 mt-2">+ New Note</button>

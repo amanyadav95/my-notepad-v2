@@ -112,6 +112,18 @@ window.addEventListener('pwa:before-reload', function() {
 $(document).ready(function() {
     notes = loadNotesFromStorage();
     showIndex();
+
+    // "My-NoTeS" headings (mobile top bar + sidebar) work as a Home button
+    document.querySelectorAll('.home-title').forEach(function(el) {
+        el.addEventListener('click', goHome);
+        el.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                goHome();
+            }
+        });
+    });
+
     // Phone mode: open the notes drawer on start for easy note selection
     if (window.matchMedia('(max-width: 767.98px)').matches) {
         openSidebar();
@@ -192,6 +204,17 @@ function showIndex() {
                 </div>`;
     })
     $("#indexListing").html(html);
+}
+
+/* Home screen: deselect the note and the file, collapse the page lists and
+   clear the editor. Bound to the "My-NoTeS" headings (top bar + sidebar) */
+function goHome() {
+    activeNote = '';
+    activePage = '';
+    $('#fileTitle').val('').prop('disabled', true);
+    $('#fileText').val('').prop('disabled', true);
+    $('#saveNote').text('');
+    showIndex();
 }
 
 function selectNotee(ttl) {
