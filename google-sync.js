@@ -3,6 +3,10 @@
    - Sign in with Google (Identity Services button)
    - Backs up notes + files as a visible JSON file in the user's My Drive
    - Auto-syncs a few seconds after any change, plus "Sync now" / "Restore"
+   - Two-way sync: when sync runs it first checks Drive for an existing
+     backup, downloads it and MERGES it with local data (newest edit wins)
+     before writing anything, so a device never clobbers changes that were
+     made elsewhere
    ========================================================================== */
 
 const GS_CONFIG = {
@@ -20,6 +24,9 @@ const GS_LAST_SYNC_KEY = 'google_sync_last_sync';
 const GS_TOKEN_KEY = 'google_sync_token';
 const GS_GRANTED_KEY = 'google_sync_granted';
 const GS_ERROR_KEY = 'google_sync_last_error';
+const GS_TIMES_KEY = 'google_sync_times';         // storageKey -> last edited/deleted time
+const GS_BASELINE_KEY = 'google_sync_baseline';   // snapshot of the last successful upload
+const GS_PAYLOAD_VERSION = 2;                     // v2 = carries per-key edit times
 
 let gsUser = null;
 let gsToken = null;
@@ -280,6 +287,7 @@ function gsSignOut() {
     gsTokenExpiresAt = 0;
     localStorage.removeItem(GS_USER_KEY);
     localStorage.removeItem(GS_GRANTED_KEY); // token was revoked → consent needed again
+    try { localStorage.removeItem(GS_BASELINE_KEY); } catch (e) { /* ignore */ } // no cross-account merges
     gsClearToken();
     gsSetError(null);
     gsUser = null;
@@ -327,10 +335,11 @@ function gsBuildPayload() {
     }
     return {
         app: 'my-notepad-v2',
-        version: 1,
+        version: GS_PAYLOAD_VERSION,
         savedAt: new Date().toISOString(),
         notes: localStorage.getItem(GS_INDEX_KEY),  // raw string or null
-        files: files
+        files: files,
+        times: gsReadTimes() // per-key edit times → conflicts resolve "newest edit wins"
     };
 }
 
@@ -373,6 +382,404 @@ async function gsDownload(token, fileId) {
     return r.json();
 }
 
+/* ------------------------------- merging --------------------------------
+   Before a sync writes anything to Drive, the backup that is already there
+   is downloaded and merged with the local data:
+
+   - notes index : merged note-by-note / page-by-page (union of both sides).
+                   Deletions are detected with the baseline (the state of the
+                   last successful upload from THIS device), so removing a
+                   note here also removes it everywhere — unless the other
+                   device changed it more recently, in which case its copy
+                   wins.
+   - page text   : when both sides edited the same page, the newest edit wins
+                   (per-key times recorded by gsMarkChange in app.js).
+   ------------------------------------------------------------------------- */
+
+function gsHash(str) {
+    if (str === null || str === undefined) return null;
+    const s = String(str);
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return h + ':' + s.length; // hash + length = cheap collision guard
+}
+
+function gsFileKey(note, page) {
+    if (typeof fileKey === 'function') return fileKey(note, page); // app.js helper
+    return GS_FILE_PREFIX + note + '__' + page;
+}
+
+function gsReadTimes() {
+    try {
+        const raw = localStorage.getItem(GS_TIMES_KEY);
+        const v = raw ? JSON.parse(raw) : null;
+        return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function gsWriteTimes(map) {
+    try { localStorage.setItem(GS_TIMES_KEY, JSON.stringify(map || {})); } catch (e) { /* ignore */ }
+}
+
+function gsMergeTimes(a, b) {
+    const out = {};
+    [a || {}, b || {}].forEach(function(map) {
+        Object.keys(map).forEach(function(k) {
+            const t = Date.parse(map[k] || '') || 0;
+            const cur = Date.parse(out[k] || '') || 0;
+            if (t >= cur) out[k] = map[k];
+        });
+    });
+    return out;
+}
+
+/* Called by app.js on every create / save / delete */
+function gsMarkChange(key) {
+    gsWriteTimes(gsMergeTimes(gsReadTimes(), { [key]: new Date().toISOString() }));
+}
+
+function gsLoadBaseline() {
+    try {
+        const raw = localStorage.getItem(GS_BASELINE_KEY);
+        const v = raw ? JSON.parse(raw) : null;
+        return (v && typeof v === 'object' && v.hashes) ? v : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/* Remember exactly what this device last uploaded — it is what makes
+   "was this deleted here, or added there?" answerable on the next sync */
+function gsSaveBaseline(payload) {
+    try {
+        const hashes = {};
+        Object.keys(payload.files || {}).forEach(function(k) {
+            hashes[k] = gsHash(payload.files[k]);
+        });
+        localStorage.setItem(GS_BASELINE_KEY, JSON.stringify({
+            savedAt: payload.savedAt || new Date().toISOString(),
+            index: payload.notes || null,
+            hashes: hashes
+        }));
+    } catch (e) { /* ignore */ }
+}
+
+function gsParseIndex(raw) {
+    if (!raw) return {};
+    try {
+        const v = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+        return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function gsPagesOf(v) {
+    return Array.isArray(v) ? v.filter(function(p) { return typeof p === 'string'; }) : [];
+}
+
+function gsOwn(obj, key) {
+    return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+/* Last time a device touched a key. Falls back to that device's whole-file
+   timestamps when the key has no per-key time (data saved by older versions) */
+function gsActivityTime(side, key, ctx) {
+    const map = side === 'local' ? ctx.localTimes : ctx.remoteTimes;
+    const t = Date.parse((map && map[key]) || '');
+    if (t) return t;
+    return side === 'local' ? ctx.localLastSync : ctx.remoteSavedAt;
+}
+
+function gsBuildContext(remote) {
+    const baseline = gsLoadBaseline();
+    return {
+        hasBaseline: !!baseline,
+        baseIndex: baseline ? (baseline.index || null) : null,
+        baseHashes: (baseline && baseline.hashes) ? baseline.hashes : {},
+        localTimes: gsReadTimes(),
+        remoteTimes: (remote && remote.times && typeof remote.times === 'object') ? remote.times : {},
+        localLastSync: Date.parse(localStorage.getItem(GS_LAST_SYNC_KEY) || '') || 0,
+        remoteSavedAt: Date.parse((remote && remote.savedAt) || '') || 0
+    };
+}
+
+/* Newest activity for a note on one device (a note deletion stamps the time
+   of every page it removed, so deletions take part in the comparison too) */
+function gsMaxActivity(side, note, pages, ctx) {
+    let max = 0;
+    const seen = {};
+    (pages || []).forEach(function(p) {
+        const key = gsFileKey(note, p);
+        if (seen[key]) return;
+        seen[key] = true;
+        const t = gsActivityTime(side, key, ctx);
+        if (t > max) max = t;
+    });
+    return max;
+}
+
+/* Page list of one note. basePages === null means "note is new / unknown",
+   so deletions cannot be judged and everything is kept */
+function gsMergePages(lPages, rPages, basePages, note, ctx) {
+    const lSet = {}, rSet = {}, bSet = {};
+    lPages.forEach(function(p) { lSet[p] = true; });
+    rPages.forEach(function(p) { rSet[p] = true; });
+    if (basePages) basePages.forEach(function(p) { bSet[p] = true; });
+
+    const order = lPages.slice();
+    rPages.forEach(function(p) { if (!lSet[p]) order.push(p); });
+
+    const out = [];
+    order.forEach(function(p) {
+        const inL = !!lSet[p], inR = !!rSet[p];
+        if (inL && inR) { out.push(p); return; }        // exists on both sides
+        if (!basePages) { out.push(p); return; }        // new note — keep everything
+        if (!bSet[p]) { out.push(p); return; }          // added by one side — keep it
+
+        // In the last sync but missing on one side → that side deleted it.
+        // The deletion only stands when it is at least as recent as the
+        // other device's activity on that page.
+        const key = gsFileKey(note, p);
+        const deletedAt = gsActivityTime(inL ? 'remote' : 'local', key, ctx);
+        const keptAt = gsActivityTime(inL ? 'local' : 'remote', key, ctx);
+        if (deletedAt >= keptAt) return;
+        out.push(p);
+    });
+    return out;
+}
+
+function gsMergeIndex(localRaw, remoteRaw, ctx) {
+    const L = gsParseIndex(localRaw);
+    const R = gsParseIndex(remoteRaw);
+    const B = ctx.hasBaseline ? gsParseIndex(ctx.baseIndex) : null;
+
+    const order = Object.keys(L);
+    Object.keys(R).forEach(function(n) { if (!gsOwn(L, n)) order.push(n); });
+
+    const merged = {};
+    order.forEach(function(note) {
+        const inL = gsOwn(L, note), inR = gsOwn(R, note);
+        if (!inL && !inR) return; // gone from both sides
+
+        const known = ctx.hasBaseline && gsOwn(B, note);
+        const lPages = inL ? gsPagesOf(L[note]) : [];
+        const rPages = inR ? gsPagesOf(R[note]) : [];
+        const bPages = known ? gsPagesOf(B[note]) : null;
+
+        if (known && inL !== inR) {
+            // The whole note was deleted on one device. Keep it only when the
+            // other device has worked on it since that deletion.
+            const all = lPages.concat(rPages, bPages || []);
+            const deletedAt = gsMaxActivity(inL ? 'remote' : 'local', note, all, ctx);
+            const keptAt = gsMaxActivity(inL ? 'local' : 'remote', note, all, ctx);
+            if (deletedAt >= keptAt) return; // deletion stands
+            merged[note] = (inL ? lPages : rPages).slice();
+            return;
+        }
+
+        merged[note] = gsMergePages(lPages, rPages, bPages, note, ctx);
+    });
+    return merged;
+}
+
+/* Pick the text of one page when both devices have it */
+function gsPickValue(key, localVal, remoteVal, ctx) {
+    if (localVal !== null && remoteVal !== null && String(localVal) === String(remoteVal)) return localVal;
+    if (localVal === null) return remoteVal;
+    if (remoteVal === null) return localVal;
+
+    const lt = gsActivityTime('local', key, ctx);
+    const rt = gsActivityTime('remote', key, ctx);
+    if (lt !== rt) return lt > rt ? localVal : remoteVal; // newest edit wins
+
+    // Same activity time → fall back to "who changed it since the last sync"
+    const baseHash = ctx.baseHashes[key];
+    if (baseHash !== undefined && baseHash !== null) {
+        const lChanged = gsHash(localVal) !== baseHash;
+        const rChanged = gsHash(remoteVal) !== baseHash;
+        if (lChanged && !rChanged) return localVal;
+        if (rChanged && !lChanged) return remoteVal;
+    }
+    return localVal;
+}
+
+function gsMergeFiles(localFiles, remoteFiles, mergedIndex, ctx) {
+    // Only pages that survived the index merge keep their text
+    const expected = {};
+    Object.keys(mergedIndex).forEach(function(note) {
+        gsPagesOf(mergedIndex[note]).forEach(function(p) {
+            expected[gsFileKey(note, p)] = true;
+        });
+    });
+
+    const keys = {};
+    [localFiles || {}, remoteFiles || {}].forEach(function(src) {
+        Object.keys(src).forEach(function(k) {
+            if (k.indexOf(GS_FILE_PREFIX) === 0) keys[k] = true;
+        });
+    });
+
+    const out = {};
+    Object.keys(keys).forEach(function(k) {
+        if (!expected[k]) return; // page no longer exists → drop its text
+        const lv = gsOwn(localFiles || {}, k) ? localFiles[k] : null;
+        const rv = gsOwn(remoteFiles || {}, k) ? remoteFiles[k] : null;
+        const v = gsPickValue(k, lv, rv, ctx);
+        if (v !== null) out[k] = v;
+    });
+    return out;
+}
+
+/* Both payloads must already be through gsNormalizePayload */
+function gsMergePayloads(local, remote) {
+    const ctx = gsBuildContext(remote);
+    const mergedIndex = gsMergeIndex(local.notes, remote.notes, ctx);
+    const mergedFiles = gsMergeFiles(local.files, remote.files, mergedIndex, ctx);
+    return {
+        notes: Object.keys(mergedIndex).length ? JSON.stringify(mergedIndex) : null,
+        files: mergedFiles,
+        times: gsMergeTimes(ctx.localTimes, ctx.remoteTimes)
+    };
+}
+
+/* Uniform shape for local and downloaded payloads: strings only */
+function gsNormalizePayload(p) {
+    const files = {};
+    const src = (p && p.files && typeof p.files === 'object') ? p.files : {};
+    Object.keys(src).forEach(function(k) {
+        if (k.indexOf(GS_FILE_PREFIX) !== 0) return;
+        const v = src[k];
+        files[k] = (typeof v === 'string') ? v : JSON.stringify(v);
+    });
+    let notes = p ? p.notes : null;
+    if (notes !== null && notes !== undefined && typeof notes !== 'string') notes = JSON.stringify(notes);
+    return {
+        app: (p && p.app) || 'my-notepad-v2',
+        version: (p && p.version) || GS_PAYLOAD_VERSION,
+        savedAt: (p && p.savedAt) || new Date().toISOString(),
+        notes: notes || null,
+        files: files,
+        times: (p && p.times && typeof p.times === 'object') ? p.times : {}
+    };
+}
+
+function gsIsValidPayload(p) {
+    return !!(p && typeof p === 'object' && !Array.isArray(p)) &&
+        (typeof p.notes === 'string' || p.notes === null || typeof p.notes === 'object') &&
+        (p.files === undefined || (p.files && typeof p.files === 'object'));
+}
+
+function gsPagesEqual(a, b) {
+    const x = gsPagesOf(a), y = gsPagesOf(b);
+    return x.length === y.length && x.every(function(v, i) { return v === y[i]; });
+}
+
+function gsIndexEqual(a, b) {
+    const A = gsParseIndex(a), B = gsParseIndex(b);
+    const ka = Object.keys(A), kb = Object.keys(B);
+    if (ka.length !== kb.length) return false;
+    return ka.every(function(k) { return gsOwn(B, k) && gsPagesEqual(A[k], B[k]); });
+}
+
+/* Content only — savedAt / times are metadata and always differ */
+function gsSameContent(a, b) {
+    if (!gsIndexEqual(a.notes, b.notes)) return false;
+    const af = a.files || {}, bf = b.files || {};
+    const ak = Object.keys(af), bk = Object.keys(bf);
+    if (ak.length !== bk.length) return false;
+    return ak.every(function(k) { return gsOwn(bf, k) && String(af[k]) === String(bf[k]); });
+}
+
+function gsResetEditor() {
+    if (window.jQuery) {
+        window.jQuery('#fileTitle').val('');
+        window.jQuery('#fileText').val('').prop('disabled', true);
+        window.jQuery('#saveNote').text('');
+    }
+}
+
+/* Write the merged state into localStorage (only what actually differs) and
+   re-render the sidebar / open page. Returns true when local data changed */
+function gsApplyMerged(merged) {
+    let indexChanged = false;
+    let filesChanged = false;
+
+    const localKeys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.indexOf(GS_FILE_PREFIX) === 0) localKeys.push(k);
+    }
+    localKeys.forEach(function(k) {
+        if (!gsOwn(merged.files, k)) {
+            localStorage.removeItem(k);
+            filesChanged = true;
+        } else if (merged.files[k] !== localStorage.getItem(k)) {
+            localStorage.setItem(k, merged.files[k]);
+            filesChanged = true;
+        }
+    });
+    Object.keys(merged.files).forEach(function(k) {
+        if (localStorage.getItem(k) === null) {
+            localStorage.setItem(k, merged.files[k]);
+            filesChanged = true;
+        }
+    });
+
+    const currentIndex = localStorage.getItem(GS_INDEX_KEY);
+    const nextIndex = merged.notes || null;
+    if ((currentIndex || null) !== nextIndex) {
+        if (nextIndex) localStorage.setItem(GS_INDEX_KEY, nextIndex);
+        else localStorage.removeItem(GS_INDEX_KEY);
+        indexChanged = true;
+    }
+
+    gsWriteTimes(gsMergeTimes(gsReadTimes(), merged.times));
+
+    if (!indexChanged && !filesChanged) return false;
+    gsRefreshAfterMerge(indexChanged, filesChanged);
+    return true;
+}
+
+function gsRefreshAfterMerge(indexChanged, filesChanged) {
+    // activeNote / activePage / notes come from app.js — guard so sync still
+    // works (and never throws) if app.js has not loaded
+    const hasApp = typeof activeNote !== 'undefined';
+
+    if (indexChanged) {
+        if (typeof loadNotesFromStorage === 'function') notes = loadNotesFromStorage();
+        if (hasApp) {
+            const idx = (typeof notes === 'object' && notes) ? notes : {};
+            if (activeNote && !gsOwn(idx, activeNote)) {
+                activeNote = '';
+                activePage = '';
+                gsResetEditor();
+            } else if (activeNote && activePage && gsPagesOf(idx[activeNote]).indexOf(activePage) === -1) {
+                activePage = '';
+                gsResetEditor();
+            }
+        }
+        if (typeof showIndex === 'function') showIndex();
+    }
+
+    if (!filesChanged || !hasApp) return;
+    const editor = document.getElementById('fileText');
+    const saveBtn = document.getElementById('saveNote');
+    if (!editor || !activeNote || !activePage) return;
+    // Never overwrite text the user is currently typing
+    if (!editor.disabled && saveBtn && saveBtn.textContent.trim() === 'Save') return;
+
+    const data = (typeof getFileFromStorage === 'function') ? getFileFromStorage(activeNote, activePage) : {};
+    if (data && typeof data === 'object' && gsOwn(data, 'text_note')) {
+        editor.value = data.text_note || '';
+        if (typeof viewPage === 'function') viewPage(data);
+    } else {
+        gsResetEditor();
+    }
+}
+
 /* --------------------------- sync / restore ----------------------------- */
 
 async function gsSyncToDrive(interactive) {
@@ -393,11 +800,46 @@ async function gsSyncToDrive(interactive) {
         }
         return false;
     }
+    gsSetSyncing(true);
     try {
-        const payload = gsBuildPayload();
+        const local = gsNormalizePayload(gsBuildPayload());
         const fileId = await gsFindBackup(token);
-        if (fileId) await gsUpdateFile(token, fileId, payload);
-        else await gsCreateFile(token, payload);
+
+        /* Drive already has a backup → fetch it and merge BEFORE overwriting */
+        if (fileId) {
+            let remoteRaw;
+            try {
+                remoteRaw = await gsDownload(token, fileId);
+            } catch (e) {
+                // Never overwrite a backup that could not be read
+                throw new Error('Could not read the existing Google Drive backup, so nothing was overwritten — ' + (e.message || e));
+            }
+            if (!gsIsValidPayload(remoteRaw)) {
+                throw new Error('The file in Google Drive is not a my-notepad backup — nothing was overwritten. Rename or delete it in Drive, then sync again.');
+            }
+            const remote = gsNormalizePayload(remoteRaw);
+            const pulled = gsApplyMerged(gsMergePayloads(local, remote));
+            const payload = gsNormalizePayload(gsBuildPayload()); // rebuilt = merged state
+
+            if (gsSameContent(payload, remote)) {
+                gsSaveBaseline(payload);
+                gsMarkSynced();
+                if (pulled) gsToast('Merged changes from Google Drive.', 'info');
+                else if (interactive) gsToast('Already up to date with Google Drive.', 'success');
+                return true;
+            }
+
+            await gsUpdateFile(token, fileId, payload);
+            gsSaveBaseline(payload);
+            gsMarkSynced();
+            if (interactive) gsToast(pulled ? 'Merged with Google Drive and synced.' : 'Synced to Google Drive.', 'success');
+            else if (pulled) gsToast('Merged changes from Google Drive.', 'info');
+            return true;
+        }
+
+        /* No backup yet → first upload */
+        await gsCreateFile(token, local);
+        gsSaveBaseline(local);
         gsMarkSynced();
         if (interactive) gsToast('Synced to Google Drive.', 'success');
         return true;
@@ -406,6 +848,8 @@ async function gsSyncToDrive(interactive) {
         gsSetError(e.message || String(e));
         if (interactive) gsToast('Google sync failed: ' + (e.message || e), 'danger');
         return false;
+    } finally {
+        gsSetSyncing(false);
     }
 }
 
@@ -429,6 +873,9 @@ function gsApplyPayload(payload) {
     } else {
         localStorage.removeItem(GS_INDEX_KEY);
     }
+
+    // Keep the newest edit time for every restored key
+    gsWriteTimes(gsMergeTimes(gsReadTimes(), payload.times || {}));
 
     // Reset the open editor (its note/file may no longer exist) and re-render
     if (typeof loadNotesFromStorage === 'function') notes = loadNotesFromStorage();
@@ -553,12 +1000,48 @@ window.myNotepadGoogle = {
             grantedBefore: localStorage.getItem(GS_GRANTED_KEY) === '1',
             tokenValid: !!(gsToken && Date.now() < gsTokenExpiresAt),
             tokenExpiresInSec: gsToken ? Math.max(0, Math.round((gsTokenExpiresAt - Date.now()) / 1000)) : 0,
-            lastSync: localStorage.getItem(GS_LAST_SYNC_KEY)
+            lastSync: localStorage.getItem(GS_LAST_SYNC_KEY),
+            hasBaseline: !!gsLoadBaseline(),
+            baselineAt: (gsLoadBaseline() || {}).savedAt || null,
+            trackedTimes: Object.keys(gsReadTimes()).length
         };
     },
     sync: function() { return gsSyncToDrive(true); },
     restore: function() { return gsRestoreFromGoogle(); },
     signOut: function() { gsSignOut(); },
+    /* Dry-run of the merge: downloads the Drive backup and reports what a
+       sync would change locally, without uploading anything */
+    mergePreview: function() {
+        const token = gsToken || gsLoadToken();
+        if (!token) return Promise.resolve('No access token — click "Sync now" once first.');
+        return gsFindBackup(token).then(function(fileId) {
+            if (!fileId) return 'No backup on Drive yet — first sync just uploads the local data.';
+            return gsDownload(token, fileId).then(function(remoteRaw) {
+                if (!gsIsValidPayload(remoteRaw)) return { error: 'Existing Drive file is not a my-notepad backup.' };
+                const local = gsNormalizePayload(gsBuildPayload());
+                const remote = gsNormalizePayload(remoteRaw);
+                const merged = gsMergePayloads(local, remote);
+                const remoteIdx = gsParseIndex(remote.notes);
+                const mergedIdx = gsParseIndex(merged.notes);
+                const localIdx = gsParseIndex(local.notes);
+                const added = Object.keys(mergedIdx).filter(function(n) { return !gsOwn(localIdx, n); });
+                const removed = Object.keys(localIdx).filter(function(n) { return !gsOwn(mergedIdx, n); });
+                const changed = Object.keys(merged.files).filter(function(k) {
+                    return String(local.files[k]) !== String(merged.files[k]);
+                });
+                return {
+                    wouldUpload: !gsSameContent(gsNormalizePayload({
+                        notes: merged.notes, files: merged.files, savedAt: local.savedAt, times: merged.times
+                    }), remote),
+                    notesFromDrive: added,
+                    notesRemovedHere: removed,
+                    pagesPulledFromDrive: changed,
+                    mergedNoteCount: Object.keys(mergedIdx).length,
+                    remoteNoteCount: Object.keys(remoteIdx).length
+                };
+            });
+        });
+    },
     // Ask Drive directly with the current token and print the raw answer
     probe: function() {
         const token = gsToken || gsLoadToken();

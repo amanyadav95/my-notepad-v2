@@ -52,6 +52,7 @@ function loadNotesFromStorage() {
 function saveNotesToStorage() {
     try {
         localStorage.setItem(NOTES_INDEX_KEY, JSON.stringify(notes));
+        if (typeof gsMarkChange === 'function') gsMarkChange(NOTES_INDEX_KEY); // merge: newest change wins
         if (typeof scheduleSync === 'function') scheduleSync(); // Google Drive auto-sync
         return true;
     } catch (e) {
@@ -67,6 +68,7 @@ function saveFileToStorage(ttl, pageName, text) {
             page_name: pageName,
             text_note: text
         }));
+        if (typeof gsMarkChange === 'function') gsMarkChange(fileKey(ttl, pageName)); // merge: newest edit wins
         if (typeof scheduleSync === 'function') scheduleSync(); // Google Drive auto-sync
         return true;
     } catch (e) {
@@ -86,7 +88,9 @@ function getFileFromStorage(ttl, pageName) {
 }
 
 function deleteFileFromStorage(ttl, pageName) {
-    localStorage.removeItem(fileKey(ttl, pageName));
+    const key = fileKey(ttl, pageName);
+    localStorage.removeItem(key);
+    if (typeof gsMarkChange === 'function') gsMarkChange(key); // deletions are merged too
 }
 
 // Persist unsaved editor text before a PWA update reloads the page
