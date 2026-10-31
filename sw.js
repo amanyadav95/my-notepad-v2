@@ -1,5 +1,16 @@
 // Bump this on every deploy so the browser detects a byte-diff and installs a new SW
-const CACHE_NAME = 'my-app-cache-v-1.30';
+const CACHE_NAME = 'my-app-cache-v-1.42';
+
+// KaTeX math fonts in woff2 (every current browser) so formulas render offline too
+const KATEX_FONTS = [
+  'KaTeX_AMS-Regular', 'KaTeX_Caligraphic-Bold', 'KaTeX_Caligraphic-Regular',
+  'KaTeX_Fraktur-Bold', 'KaTeX_Fraktur-Regular', 'KaTeX_Main-Bold',
+  'KaTeX_Main-BoldItalic', 'KaTeX_Main-Italic', 'KaTeX_Main-Regular',
+  'KaTeX_Math-BoldItalic', 'KaTeX_Math-Italic', 'KaTeX_SansSerif-Bold',
+  'KaTeX_SansSerif-Italic', 'KaTeX_SansSerif-Regular', 'KaTeX_Script-Regular',
+  'KaTeX_Size1-Regular', 'KaTeX_Size2-Regular', 'KaTeX_Size3-Regular',
+  'KaTeX_Size4-Regular', 'KaTeX_Typewriter-Regular'
+].map(n => `./fonts/${n}.woff2`);
 
 // Paths are relative to sw.js so precaching also works from a sub-folder (e.g. /my-notepad-v2/)
 const urlsToCache = [
@@ -10,6 +21,12 @@ const urlsToCache = [
   './bootstrap.bundle.min.js',
   './jquery-4.0.0.min.js',
   './popper.min.js',
+  './quill.core.css',
+  './quill.snow.css',
+  './quill.min.js',
+  './katex.min.css',
+  './katex.min.js',
+  ...KATEX_FONTS,
   './pwa-update.js',
   './google-sync.js',
   './app.js',

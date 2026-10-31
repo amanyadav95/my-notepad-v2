@@ -96,20 +96,82 @@ function deleteFileFromStorage(ttl, pageName) {
 // Persist unsaved editor text before a PWA update reloads the page
 window.addEventListener('pwa:before-reload', function() {
     try {
-        const editor = document.getElementById('fileText');
         const saveBtn = document.getElementById('saveNote');
-        if (!editor || editor.disabled || !saveBtn) return;
+        if (!saveBtn || !editorEnabled()) return; // no editable file open
         if (saveBtn.textContent.trim() !== 'Save') return; // "Edit"/empty = nothing unsaved
         if (!activeNote || !activePage) return;
-        if (editor.value) saveFileToStorage(activeNote, activePage, editor.value);
+        if (!editorEmpty()) saveFileToStorage(activeNote, activePage, editorHTML());
     } catch (e) {
         console.error('Failed to save before update reload', e);
     }
 });
 
+/* ---------------------- Quill rich-text editor ----------------------
+   Replaces the old plain <textarea id="fileText">. New saves are HTML, but
+   old plain-text notes still open: editorLoad() sniffs the format on open
+   (plain text → one Quill line per \n, HTML → pasted as markup).
+   Toolbar formats: https://quilljs.com/docs/formats */
+var quill = null;
+
+const EDITOR_FORMATS = ['font', 'size', 'header', 'bold', 'italic', 'underline', 'strike',
+    'color', 'background', 'script', 'list', 'indent', 'blockquote', 'code-block',
+    'direction', 'align', 'link', 'formula'];
+
+function initEditor() {
+    const el = document.getElementById('fileText');
+    if (!el || typeof Quill === 'undefined') {
+        if (el) el.textContent = 'The rich editor failed to load — your notes are still safe.';
+        return;
+    }
+    quill = new Quill('#fileText', {
+        theme: 'snow',
+        placeholder: 'Start writing…',
+        modules: { toolbar: '#toolbar-container' },
+        formats: EDITOR_FORMATS
+    });
+    editorEnable(false); // starts read-only with the toolbar hidden
+}
+
+/* Helpers used everywhere a textarea used to be touched (.val()/.disabled
+   no longer apply to the Quill container), including from google-sync.js.
+   This is also the single place that decides whether the toolbar is shown:
+   it belongs to edit mode only, reading a note keeps just title + content. */
+function editorEnable(on) {
+    if (!quill) return;
+    quill.enable(!!on);
+    const bar = document.getElementById('toolbar-container');
+    const box = document.getElementById('fileText');
+    if (bar) bar.style.display = on ? '' : 'none';
+    if (box) box.classList.toggle('tb-closed', !on);
+}
+function editorEnabled() { return quill ? quill.isEnabled() : false; }
+function editorClear() { if (quill) quill.setText(''); }
+function editorEmpty() { return quill ? quill.getText().trim() === '' : true; }
+function editorHTML() { return quill ? quill.root.innerHTML : ''; }
+
+/* Old notes are plain text (\n = line break), rich notes are HTML. Only
+   treat content as HTML when it clearly starts with (or contains) a markup
+   tag, so ordinary text with "<" or ">" is never mangled. */
+const NOTE_HTML_RE = /^\s*<(?:p|div|br|h[1-6]|ol|ul|li|blockquote|pre|code|strong|em|u|s|strike|a|span|table)\b|<\/(?:p|li|div|h[1-6]|blockquote|pre|ol|ul)>/i;
+
+function editorLoad(content) {
+    if (!quill) return;
+    content = (content == null) ? '' : String(content);
+    if (NOTE_HTML_RE.test(content)) {
+        quill.clipboard.dangerouslyPasteHTML(content);
+    } else {
+        quill.setText(content); // plain text → one Quill line per \n
+    }
+    // Opening a note must not be undoable into nothing: first Ctrl+Z keeps the note
+    try {
+        if (quill.history && typeof quill.history.clear === 'function') quill.history.clear();
+    } catch (e) { /* older builds without history.clear() */ }
+}
+
 /* -------------------------------------------------------------------- */
 
 $(document).ready(function() {
+    initEditor();
     notes = loadNotesFromStorage();
     showIndex();
 
@@ -354,7 +416,8 @@ function goHome() {
     activeNote = '';
     activePage = '';
     $('#fileTitle').val('').prop('disabled', true);
-    $('#fileText').val('').prop('disabled', true);
+    editorClear();
+    editorEnable(false);
     $('#saveNote').text('');
     showIndex();
 }
@@ -367,7 +430,8 @@ function selectNotee(ttl) {
     activeNote = ttl;
     activePage = '';
     $('#fileTitle').val('');
-    $('#fileText').val('').prop('disabled', true);
+    editorClear();
+    editorEnable(false);
     $("#saveNote").text('');
     $(`#${ttl}`).show();
     updateHomeScreen(); // no file open yet → show the feature overview
@@ -396,7 +460,8 @@ function selectFile(ttl, pgs) {
     activePage = notes[ttl][pgs];
     activeNote = ttl;
     $('#fileTitle').val(activePage);
-    $('#fileText').val('').prop('disabled', false);
+    editorClear();
+    editorEnable(true);
     $('.select-file').removeClass('active-file');
     $(`#${ttl}-${pgs}`).addClass('active-file');
     let file = getFileFromStorage(ttl, activePage);
@@ -407,10 +472,10 @@ function selectFile(ttl, pgs) {
 }
 
 $(`#saveNote`).on('click', function() {
-    let text = $('#fileText').val();
+    let text = editorHTML();
     let title = $('#fileTitle').val();
 
-    if (text != '' && $("#saveNote").text() == 'Save') {
+    if (!editorEmpty() && $("#saveNote").text() == 'Save') {
         let file = {'note_name': activeNote, 'page_name': activePage, 'text_note': text};
         const ok = saveFileToStorage(activeNote, activePage, text);
         if (ok) {
@@ -422,18 +487,21 @@ $(`#saveNote`).on('click', function() {
             showToast('Something went wrong.', 'danger');
         }
     }else if ($("#saveNote").text() == 'Edit') {
-        $('#fileText').prop('disabled', false);
+        editorEnable(true);
         $("#saveNote").text('Save');
+        if (quill) quill.focus(); // keep typing where the user left off
     }
 });
 
 function viewPage(pageData) {
     if (Object.keys(pageData).length === 0) {
+        editorClear();
+        editorEnable(true);
         $("#saveNote").text('Save');
     }else{
-        $('#fileText').val(pageData.text_note);
+        editorLoad(pageData.text_note);
         $("#saveNote").text('Edit');
-        $('#fileText').prop('disabled', true);
+        editorEnable(false);
     }
 }
 
@@ -456,7 +524,8 @@ function deleteNote(event, ttl) {
                 activeNote = '';
                 activePage = '';
                 $('#fileTitle').val('');
-                $('#fileText').val('').prop('disabled', true);
+                editorClear();
+                editorEnable(false);
                 $("#saveNote").text('');
             }
             showToast('Note deleted.', 'success');
@@ -483,7 +552,8 @@ function deleteFile(event, ttl, pgs) {
                 if (activeNote === ttl && activePage === pageName) {
                     activePage = '';
                     $('#fileTitle').val('');
-                    $('#fileText').val('').prop('disabled', true);
+                    editorClear();
+                    editorEnable(false);
                     $("#saveNote").text('');
                 }
                 showToast('File deleted.', 'success');

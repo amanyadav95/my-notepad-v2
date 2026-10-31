@@ -1018,8 +1018,14 @@ function gsSameContent(a, b) {
 function gsResetEditor() {
     if (window.jQuery) {
         window.jQuery('#fileTitle').val('');
-        window.jQuery('#fileText').val('').prop('disabled', true);
         window.jQuery('#saveNote').text('');
+    }
+    // #fileText is a Quill container now — use app.js helpers when present
+    if (typeof editorClear === 'function' && typeof editorEnable === 'function') {
+        editorClear();
+        editorEnable(false);
+    } else if (window.jQuery) {
+        window.jQuery('#fileText').val('').prop('disabled', true); // textarea fallback
     }
 }
 
@@ -1091,12 +1097,14 @@ function gsRefreshAfterMerge(indexChanged, filesChanged) {
     const saveBtn = document.getElementById('saveNote');
     if (!editor || !activeNote || !activePage) return;
     // Never overwrite text the user is currently typing
-    if (!editor.disabled && saveBtn && saveBtn.textContent.trim() === 'Save') return;
+    const editing = (typeof editorEnabled === 'function') ? editorEnabled() : !editor.disabled;
+    if (editing && saveBtn && saveBtn.textContent.trim() === 'Save') return;
 
     const data = (typeof getFileFromStorage === 'function') ? getFileFromStorage(activeNote, activePage) : {};
     if (data && typeof data === 'object' && gsOwn(data, 'text_note')) {
-        editor.value = data.text_note || '';
+        // viewPage() loads the content into the Quill editor itself
         if (typeof viewPage === 'function') viewPage(data);
+        else editor.value = data.text_note || ''; // app.js missing: textarea fallback
     } else {
         gsResetEditor();
     }
@@ -1228,11 +1236,7 @@ function gsApplyPayload(payload) {
     if (typeof loadNotesFromStorage === 'function') notes = loadNotesFromStorage();
     activeNote = '';
     activePage = '';
-    if (window.jQuery) {
-        window.jQuery('#fileTitle').val('');
-        window.jQuery('#fileText').val('').prop('disabled', true);
-        window.jQuery('#saveNote').text('');
-    }
+    gsResetEditor(); // clears the title, the Quill editor and the save button
     if (typeof showIndex === 'function') showIndex();
 }
 
