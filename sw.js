@@ -1,5 +1,5 @@
 // Bump this on every deploy so the browser detects a byte-diff and installs a new SW
-const CACHE_NAME = 'my-app-cache-v-1.42';
+const CACHE_NAME = 'my-app-cache-v-1.43';
 
 // KaTeX math fonts in woff2 (every current browser) so formulas render offline too
 const KATEX_FONTS = [

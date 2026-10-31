@@ -76,11 +76,10 @@
     </script>
 <style>
     .side-nev {
-        min-height: 665px !important;
-        /* Sidebar = full viewport height (leaves room for row margin + footer);
-           the card body inside scrolls when content is taller */
-        height: calc(100vh - 4rem);
-        height: calc(100dvh - 4rem);
+        /* Fill the sidebar column exactly — the column is already capped to
+           the viewport, so the card can never push the page taller on short
+           screens. The card body inside scrolls when content is taller. */
+        height: 100%;
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -221,12 +220,21 @@
     .app-wrap {
         display: flex;
         flex-direction: column;
+        /* Definite height (not just min-height): the shell never grows with
+           content, so every min-height:0 below it caps out at the viewport
+           and long notes scroll inside .ql-editor — like the old textarea. */
+        height: 100vh;
+        height: 100dvh;
         min-height: 100vh;
         min-height: 100dvh;
     }
     .app-wrap > .row {
         flex: 1 1 auto;
         min-height: 0;
+        /* Single flex line: its cross size becomes the capped row height, so
+           the columns stretch to it instead of sizing the line to their
+           (content-based) height — which is what pushed the page taller. */
+        flex-wrap: nowrap;
     }
     .editor-col {
         display: flex;
