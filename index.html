@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
 
     <!-- ============ search results ============ -->
     <title>My-NoTeS — Free Online Notepad with Google Drive Backup</title>
@@ -213,6 +213,16 @@
         word-break: break-word;
     }
 
+    /* The layout is a fixed-viewport shell — only the components inside it
+       scroll (.ql-editor, the notes list, the home screen). Locking the
+       document stops the page from panning when the phone keyboard opens,
+       which is what made the whole page appear to scroll. */
+    html, body {
+        height: 100%;
+        overflow: hidden;
+        overscroll-behavior: none;
+    }
+
     /* ---- Editor fills the screen height ----
        Page stacks as: [mobile top bar] + [row], total = viewport height.
        The row grows to fill the leftover space, and the textarea stretches
@@ -225,8 +235,12 @@
            and long notes scroll inside .ql-editor — like the old textarea. */
         height: 100vh;
         height: 100dvh;
-        min-height: 100vh;
-        min-height: 100dvh;
+        /* Never taller than the body. An over-tall shell (100dvh vs the
+           body's 100% disagreeing on phones) makes the overflow:hidden body
+           programmatically scrollable, and focusing the keyboard then scrolls
+           the page under the toolbar. No min-height:100dvh here either — it
+           would beat max-height and reintroduce the overflow. */
+        max-height: 100%;
     }
     .app-wrap > .row {
         flex: 1 1 auto;
@@ -252,13 +266,29 @@
         flex: 0 0 auto;
     }
     /* ---- Quill rich editor (replaces the old plain textarea) ----
-       Title bar and toolbar keep their natural size; #fileText (Quill's
-       container) stretches into the leftover space and .ql-editor scrolls
-       inside it, exactly like the textarea did. */
+       The toolbar and #fileText (Quill's container) sit in one bordered box,
+       so they move as a single unit: the toolbar is pinned to the top of the
+       box and the content scrolls beneath it, exactly like the textarea did. */
+    .editor-box {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+        border: 1px solid #ced4da;
+        border-radius: .375rem;
+        /* No overflow:hidden here on purpose: Quill renders its link tooltip
+           inside the container and it must not be clipped by the box. */
+    }
     #toolbar-container {
         flex: 0 0 auto;
+        /* Not position:sticky on purpose — sticky would latch onto the body's
+           scrollport whenever focus/keyboard makes the body scroll a few px,
+           painting the toolbar over the first line you type. The flex box
+           already holds it at the top of the editor at all times. */
+        background: #fff;
         border: 0;
         border-bottom: 1px solid #ced4da;
+        border-radius: .375rem .375rem 0 0;  /* match the box's top corners */
         padding: .4rem .5rem;
     }
     #fileText {
@@ -267,16 +297,10 @@
         flex: 1 1 auto;
         height: auto;          /* flexbox decides the height, not Quill's 100% */
         min-height: 120px;
-        border: 1px solid #ced4da;
-        border-top: 0;         /* shared edge with the toolbar above */
-        border-radius: 0 0 .375rem .375rem;
+        border: 0;             /* .editor-box draws the frame around both */
+        border-radius: 0;
         font-family: inherit;  /* Bootstrap's font, not Quill's Helvetica */
         font-size: 1rem;
-    }
-    /* Read mode: the toolbar is hidden, so the editor draws its own top edge */
-    #fileText.tb-closed {
-        border-top: 1px solid #ced4da;
-        border-radius: .375rem;
     }
     #fileText > .ql-editor {
         flex: 1 1 auto;
@@ -497,52 +521,56 @@
                     <input type="text" id="fileTitle" class="form-control" placeholder="Title" aria-label="Title" aria-describedby="saveNote" disabled>
                     <button class="btn btn-outline-secondary" type="button" id="saveNote"></button>
                   </div>
-                  <!-- Full Quill toolbar — formats: https://quilljs.com/docs/formats -->
-                  <div id="toolbar-container">
-                    <span class="ql-formats">
-                      <select class="ql-font" title="Font family"></select>
-                      <select class="ql-size" title="Font size"></select>
-                    </span>
-                    <span class="ql-formats">
-                      <button type="button" class="ql-bold" title="Bold"></button>
-                      <button type="button" class="ql-italic" title="Italic"></button>
-                      <button type="button" class="ql-underline" title="Underline"></button>
-                      <button type="button" class="ql-strike" title="Strikethrough"></button>
-                    </span>
-                    <span class="ql-formats">
-                      <select class="ql-color" title="Text color"></select>
-                      <select class="ql-background" title="Highlight color"></select>
-                    </span>
-                    <span class="ql-formats">
-                      <button type="button" class="ql-script" value="sub" title="Subscript"></button>
-                      <button type="button" class="ql-script" value="super" title="Superscript"></button>
-                    </span>
-                    <span class="ql-formats">
-                      <button type="button" class="ql-header" value="1" title="Heading 1"></button>
-                      <button type="button" class="ql-header" value="2" title="Heading 2"></button>
-                      <button type="button" class="ql-blockquote" title="Quote"></button>
-                      <button type="button" class="ql-code-block" title="Code block"></button>
-                    </span>
-                    <span class="ql-formats">
-                      <button type="button" class="ql-list" value="ordered" title="Numbered list"></button>
-                      <button type="button" class="ql-list" value="bullet" title="Bulleted list"></button>
-                      <button type="button" class="ql-indent" value="-1" title="Decrease indent"></button>
-                      <button type="button" class="ql-indent" value="+1" title="Increase indent"></button>
-                    </span>
-                    <span class="ql-formats">
-                      <button type="button" class="ql-direction" value="rtl" title="Right-to-left"></button>
-                      <select class="ql-align" title="Text alignment"></select>
-                    </span>
-                    <span class="ql-formats">
-                      <button type="button" class="ql-link" title="Insert link"></button>
-                      <button type="button" class="ql-formula" title="Insert formula (KaTeX)"></button>
-                    </span>
-                    <span class="ql-formats">
-                      <button type="button" class="ql-clean" title="Clear formatting"></button>
-                    </span>
+                  <!-- Toolbar + editor form one bordered box so they move as a
+                       single unit and the toolbar always sits on top -->
+                  <div class="editor-box">
+                    <!-- Full Quill toolbar — formats: https://quilljs.com/docs/formats -->
+                    <div id="toolbar-container">
+                      <span class="ql-formats">
+                        <select class="ql-font" title="Font family"></select>
+                        <select class="ql-size" title="Font size"></select>
+                      </span>
+                      <span class="ql-formats">
+                        <button type="button" class="ql-bold" title="Bold"></button>
+                        <button type="button" class="ql-italic" title="Italic"></button>
+                        <button type="button" class="ql-underline" title="Underline"></button>
+                        <button type="button" class="ql-strike" title="Strikethrough"></button>
+                      </span>
+                      <span class="ql-formats">
+                        <select class="ql-color" title="Text color"></select>
+                        <select class="ql-background" title="Highlight color"></select>
+                      </span>
+                      <span class="ql-formats">
+                        <button type="button" class="ql-script" value="sub" title="Subscript"></button>
+                        <button type="button" class="ql-script" value="super" title="Superscript"></button>
+                      </span>
+                      <span class="ql-formats">
+                        <button type="button" class="ql-header" value="1" title="Heading 1"></button>
+                        <button type="button" class="ql-header" value="2" title="Heading 2"></button>
+                        <button type="button" class="ql-blockquote" title="Quote"></button>
+                        <button type="button" class="ql-code-block" title="Code block"></button>
+                      </span>
+                      <span class="ql-formats">
+                        <button type="button" class="ql-list" value="ordered" title="Numbered list"></button>
+                        <button type="button" class="ql-list" value="bullet" title="Bulleted list"></button>
+                        <button type="button" class="ql-indent" value="-1" title="Decrease indent"></button>
+                        <button type="button" class="ql-indent" value="+1" title="Increase indent"></button>
+                      </span>
+                      <span class="ql-formats">
+                        <button type="button" class="ql-direction" value="rtl" title="Right-to-left"></button>
+                        <select class="ql-align" title="Text alignment"></select>
+                      </span>
+                      <span class="ql-formats">
+                        <button type="button" class="ql-link" title="Insert link"></button>
+                        <button type="button" class="ql-formula" title="Insert formula (KaTeX)"></button>
+                      </span>
+                      <span class="ql-formats">
+                        <button type="button" class="ql-clean" title="Clear formatting"></button>
+                      </span>
+                    </div>
+                    <!-- Quill mounts the rich editor inside this container -->
+                    <div id="fileText"></div>
                   </div>
-                  <!-- Quill mounts the rich editor inside this container -->
-                  <div id="fileText"></div>
                 </div>
                 <!-- Home screen: replaces the empty inputs while no file is open -->
                 <div id="homeScreen" class="home-screen">

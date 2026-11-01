@@ -129,6 +129,20 @@ function initEditor() {
         modules: { toolbar: '#toolbar-container' },
         formats: EDITOR_FORMATS
     });
+
+    /* Mobile IME fix: an on-screen keyboard paints its composing characters
+       straight into the DOM while Quill batches every change until
+       compositionend — so "ql-blank" (which draws the "Start writing…"
+       placeholder) stayed on top of the first letters you typed. Drop the
+       class the moment composing starts; Quill re-checks it on the next
+       text-change anyway, and the resync restores the placeholder when a
+       composition is cancelled (then no text-change ever fires). */
+    const root = quill.root;
+    root.addEventListener('compositionstart', () => root.classList.remove('ql-blank'));
+    root.addEventListener('compositionend', () => {
+        setTimeout(() => root.classList.toggle('ql-blank', quill.getLength() <= 1), 0);
+    });
+
     editorEnable(false); // starts read-only with the toolbar hidden
 }
 
@@ -139,10 +153,10 @@ function initEditor() {
 function editorEnable(on) {
     if (!quill) return;
     quill.enable(!!on);
+    // The toolbar lives inside .editor-box above the editor, so hiding it in
+    // read mode simply leaves the editor filling the box on its own.
     const bar = document.getElementById('toolbar-container');
-    const box = document.getElementById('fileText');
     if (bar) bar.style.display = on ? '' : 'none';
-    if (box) box.classList.toggle('tb-closed', !on);
 }
 function editorEnabled() { return quill ? quill.isEnabled() : false; }
 function editorClear() { if (quill) quill.setText(''); }
