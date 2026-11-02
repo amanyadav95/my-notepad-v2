@@ -131,17 +131,18 @@ function initEditor() {
     });
 
     /* Mobile IME fix: an on-screen keyboard paints its composing characters
-       straight into the DOM while Quill batches every change until
-       compositionend — so "ql-blank" (which draws the "Start writing…"
-       placeholder) stayed on top of the first letters you typed. Drop the
-       class the moment composing starts; Quill re-checks it on the next
-       text-change anyway, and the resync restores the placeholder when a
-       composition is cancelled (then no text-change ever fires). */
+       straight into the DOM while Quill batches changes until compositionend,
+       so "ql-blank" (which draws the "Start writing…" placeholder) stayed on
+       top of the first letters typed. Remove ql-blank the moment any input or
+       composition begins, and re-sync it against the actual text afterwards so
+       the placeholder never overlaps typed characters — and comes back when the
+       editor is genuinely empty (e.g. a cancelled composition). */
     const root = quill.root;
+    const resyncBlank = () => root.classList.toggle('ql-blank', quill.getText().trim() === '');
     root.addEventListener('compositionstart', () => root.classList.remove('ql-blank'));
-    root.addEventListener('compositionend', () => {
-        setTimeout(() => root.classList.toggle('ql-blank', quill.getLength() <= 1), 0);
-    });
+    root.addEventListener('beforeinput', () => root.classList.remove('ql-blank'));
+    root.addEventListener('compositionend', () => setTimeout(resyncBlank, 0));
+    root.addEventListener('focus', resyncBlank);
 
     editorEnable(false); // starts read-only with the toolbar hidden
 }
